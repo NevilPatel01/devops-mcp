@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="DevOps AI">
+  <rect width="32" height="32" rx="7" fill="#0f172a"/>
+  <path fill="#38bdf8" d="M7 22V10h3.2l3.4 6.2L17 10h3.2v12h-2.8v-7.4L14.2 22h-2.5L9.8 14.6V22H7z"/>
+  <circle cx="24" cy="12" r="2.5" fill="#22c55e"/>
+</svg>

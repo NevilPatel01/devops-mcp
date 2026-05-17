@@ -1,0 +1,33 @@
+---
+description: Phase gates — what to build and what to skip
+globs: "**/*"
+alwaysApply: false
+---
+
+# Phase gates
+
+See `docs/DEVELOPMENT_PLAN.md` and `docs/DECISIONS.md`.
+
+## Phase 0
+
+Tree, MIT LICENSE, pyproject (`~=` deps), schema, `.gitignore`, CI (pytest + ruff), examples, server skeleton with `/mcp` SSE stub.
+
+## Phase 1
+
+Read-only MCP, poller, WS `snapshot_update`, ServerGrid. Anomaly logged only — **no agent**. Bind `127.0.0.1`.
+
+**Done when:** live metrics from `droplet`/`linode` after Q7 paths filled.
+
+## Phase 2
+
+Agent one-shot JSON, incident tools (correlate without GitHub), ApprovalCard, MCP approve (not HIGH), LOW auto-exec on `test-nginx`, `action_pending_reminder`.
+
+**Done when:** kill `test-nginx` → approval or auto-restart; `primary DB` never touched.
+
+## Phase 3
+
+Execution tools incl. `run_ssh_command`; ExecutionLog; health fail → new incident. **No** `rollback_deployment` yet.
+
+## Phase 4
+
+`repos.yaml`, cicd tools, correlate + GitHub, `rollback_deployment`, postmortem, handoff drawer, recharts sparklines, false_positive UI.

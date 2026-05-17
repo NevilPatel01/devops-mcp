@@ -1,0 +1,36 @@
+---
+description: DevOps AI Agent — core architecture (always apply)
+alwaysApply: true
+---
+
+# DevOps AI Agent — core rules
+
+Read `Project.md`, `docs/DECISIONS.md`, and `docs/DEVELOPMENT_PLAN.md` before coding.
+
+## Non-negotiable
+
+- Build **phase by phase**; do not start Phase N+1 until exit criteria pass.
+- **Single process:** `python server.py` → `127.0.0.1:8080`, WebSocket `/ws`, MCP SSE `/mcp`.
+- Claude Desktop connects via SSE URL (server must already be running).
+- **SQLite only** via `db/store.py` — never `import aiosqlite` elsewhere.
+- **SSH only** (paramiko) — no Docker SDK on VPS. Pool connections, 10s timeout, `finally` close.
+- **MCP tools:** `{"success", "error", ...}` — never raise to caller.
+- **Risk + protected_services** enforced in executor before any write.
+- **UTC** in DB; local time in UI only.
+
+## Locked behavior
+
+- Agent: **one-shot JSON** (`claude-sonnet-4-5`); Python pre-gathers context — no API tool loop.
+- LOW risk: auto-execute unless service in `protected_services`.
+- HIGH risk: dashboard + `CONFIRM` only; MCP `approve_action` must reject.
+- Chat fallback: passive MCP + `action_pending_reminder` WS (no Slack/email v1).
+- Max **1 pending action per server_id**.
+- Config: commit `.example` only; `servers.yaml` / `repos.yaml` gitignored.
+
+## Deviations (approved)
+
+`repos.yaml`, MCP approval tools, Phase 0, `action_pending_reminder`, passive MCP, Phase 2 correlate without GitHub.
+
+## When unsure
+
+See `docs/DECISIONS.md`. Ask user for Q7 paths and Q9 repos (Phase 4).

@@ -1,0 +1,25 @@
+---
+description: React dashboard — Vite, WebSocket, components
+globs: "dashboard/**/*.{jsx,js,css}"
+alwaysApply: false
+---
+
+# Dashboard
+
+## Layout (v1)
+
+1. `ApprovalCard` banner (when pending; re-highlight on `action_pending_reminder`)
+2. `ServerGrid` (Phase 4: CPU/mem sparklines)
+3. `IncidentFeed`
+
+Handoff: header button → drawer on `handoff_ready`.
+
+## WebSocket
+
+- `ws.js` singleton only — no REST polling for live state.
+- HIGH risk: type `CONFIRM` before approve.
+- Sensitive service: amber banner; risk bump per DECISIONS.md.
+
+## Build
+
+`npm run build` → `dashboard/dist/` served by FastAPI.

@@ -1,0 +1,12 @@
+automation:
+  poll_interval_seconds: 30
+  approval_timeout_seconds: 60
+  auto_execute_risk_tier: low
+  stale_after_hours: 24
+  correlation_window_minutes: 30
+
+risk_overrides:
+  - action_type: rollback_deployment
+    risk_tier: medium
+  - action_type: run_ssh_command
+    risk_tier: high

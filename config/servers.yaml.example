@@ -1,0 +1,42 @@
+# Copy to config/servers.yaml (gitignored) and fill in real values.
+# Server IDs are stable — use droplet / linode per operator decision.
+
+protected_services:
+  - primary DB
+
+servers:
+  - id: droplet
+    label: "DigitalOcean Droplet"
+    host: YOUR_DROPLET_IP_OR_HOSTNAME
+    port: 22
+    user: root
+    ssh_key_path: ~/.ssh/id_ed25519
+    services:
+      - name: test-nginx
+        compose_file: /path/on/droplet/to/docker-compose.yml
+        sensitive: false
+        # health_check_url: http://localhost:8080/health  # optional
+      - name: primary DB
+        compose_file: /path/on/droplet/to/db/docker-compose.yml
+        sensitive: true
+    thresholds:
+      cpu_percent: 80
+      memory_percent: 85
+      disk_percent: 90
+      container_restart_count: 3
+
+  - id: linode
+    label: "Linode VPS"
+    host: YOUR_LINODE_IP_OR_HOSTNAME
+    port: 22
+    user: root
+    ssh_key_path: ~/.ssh/id_ed25519
+    services:
+      - name: FlexInk
+        compose_file: /home/deploy/flexink/docker-compose.yml
+        sensitive: false
+    thresholds:
+      cpu_percent: 80
+      memory_percent: 85
+      disk_percent: 90
+      container_restart_count: 3

@@ -1,0 +1,37 @@
+---
+description: Python backend — poller, agent, executor, tools
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python backend
+
+## Modules
+
+| Module | Role |
+|--------|------|
+| `poller.py` | 30s loop; compose cmd auto-detect; snapshot diff restart counts; prune >7d |
+| `agent.py` | One-shot Claude; `asyncio.Lock` per server_id; max 1 pending action/server |
+| `executor.py` | `protected_services` check; health check; fail → new incident, no auto-rollback |
+| `db/store.py` | All SQL |
+| `tools/*.py` | MCP implementations |
+
+## SSH
+
+- User `root`, key `~/.ssh/id_ed25519` (from yaml).
+- Unreachable server → status `unknown`, log, continue other servers.
+- journalctl: no sudo → sudo → empty + warning.
+
+## MCP phases
+
+- Phase 1: read-only infra tools only.
+- Phase 3+: execution tools; `rollback_deployment` Phase 4 only.
+- `repo` arg = `repos.yaml` id → resolve owner/name in `cicd.py`.
+
+## Rollback (Phase 4)
+
+Previous image from last **healthy** snapshot in SQLite; `sed` compose file on VPS.
+
+## Tests
+
+Mock SSH/GitHub; no real network in CI.
