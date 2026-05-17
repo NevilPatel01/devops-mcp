@@ -13,7 +13,7 @@ from health_metrics import (
     parse_memory_percent,
 )
 from models.config import ServerConfig, load_servers_config
-from ssh_client import detect_compose_command, is_server_reachable, run_ssh
+from ssh_client import detect_compose_command, is_server_reachable, run_ssh, run_ssh_script
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +39,22 @@ async def collect_health_snapshot(server: ServerConfig) -> dict[str, Any]:
     if not is_server_reachable(server):
         return {"success": False, "error": f"Server {server.id} is not configured"}
 
-    _, proc_out, _ = await run_ssh(server, "grep '^cpu ' /proc/stat | head -1")
-    _, free_out, _ = await run_ssh(server, "free -m")
-    _, df_out, _ = await run_ssh(server, "df -h /")
-    _, docker_svc, _ = await run_ssh(server, "systemctl is-active docker 2>/dev/null || true")
-    code, ps_out, err = await run_ssh(server, "docker ps -a --format '{{json .}}'")
+    code, combined, err = await run_ssh_script(
+        server,
+        [
+            "grep '^cpu ' /proc/stat | head -1",
+            "free -m | grep '^Mem:'",
+            "df -h / | tail -1",
+            "systemctl is-active docker 2>/dev/null || true",
+            "docker ps -a --format '{{json .}}'",
+        ],
+    )
+    lines = combined.splitlines()
+    proc_out = lines[0] if lines else ""
+    free_out = lines[1] if len(lines) > 1 else ""
+    df_out = lines[2] if len(lines) > 2 else ""
+    docker_svc = lines[3] if len(lines) > 3 else ""
+    ps_out = "\n".join(lines[4:]) if len(lines) > 4 else ""
 
     if code != 0 and not ps_out.strip():
         return {"success": False, "error": err.strip() or f"docker ps failed exit {code}"}

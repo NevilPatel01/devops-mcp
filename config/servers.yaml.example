@@ -29,7 +29,7 @@ servers:
     label: "Linode VPS"
     host: YOUR_LINODE_IP_OR_HOSTNAME
     port: 22
-    user: root
+    user: deploy
     ssh_key_path: ~/.ssh/id_ed25519
     services:
       - name: FlexInk

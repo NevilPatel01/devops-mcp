@@ -2,7 +2,7 @@
 
 An autonomous **DevOps AI agent** that monitors real VPS infrastructure over SSH, reasons about anomalies with Claude, proposes remediations, and executes fixes behind a **human-in-the-loop approval gate**. Built on the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), with a real-time React dashboard and Claude Desktop as a fallback approval channel.
 
-> **Status:** Phase 0 complete — Phase 1 next. See [docs/DECISIONS.md](docs/DECISIONS.md).  
+> **Status:** Phase 1 complete — live SSH poller + dashboard. Phase 2 next. See [docs/DECISIONS.md](docs/DECISIONS.md).  
 > **Spec:** [Project.md](Project.md) · **Plan:** [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)
 
 <!-- Replace when Phase 3 demo is recorded -->

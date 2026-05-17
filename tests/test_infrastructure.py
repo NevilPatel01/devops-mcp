@@ -22,7 +22,10 @@ def test_parse_memory_percent() -> None:
 
 
 def test_parse_disk_percent() -> None:
-    out = "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        50G   20G   28G  42% /\n"
+    out = (
+        "Filesystem      Size  Used Avail Use% Mounted on\n"
+        "/dev/sda1        50G   20G   28G  42% /\n"
+    )
     assert parse_disk_percent(out) == 42.0
 
 
@@ -43,21 +46,18 @@ async def test_collect_health_snapshot_mock() -> None:
         thresholds=ThresholdConfig(),
     )
 
-    async def fake_ssh(srv, cmd, **kwargs):
-        if "proc/stat" in cmd:
-            return 0, "cpu  100 0 50 850 0 0 0 0 0 0", ""
-        if "free" in cmd:
-            return 0, "Mem:          1000         500         500\n", ""
-        if "df" in cmd:
-            return 0, "Filesystem Size Used Avail Use% Mounted on\n/dev/x 10G 5G 5G 50% /\n", ""
-        if "systemctl" in cmd:
-            return 0, "active\n", ""
-        if "docker ps" in cmd:
-            return 0, '{"Names":"web","Status":"Up 1 hour","Image":"nginx:latest"}\n', ""
-        return 0, "", ""
+    combined = "\n".join(
+        [
+            "cpu  100 0 50 850 0 0 0 0 0 0",
+            "Mem:          1000         500         500",
+            "/dev/x 10G 5G 5G 50% /",
+            "active",
+            '{"Names":"web","Status":"Up 1 hour","Image":"nginx:latest"}',
+        ]
+    )
 
-    with patch("tools.infrastructure.run_ssh", new_callable=AsyncMock) as mock_run:
-        mock_run.side_effect = fake_ssh
+    with patch("tools.infrastructure.run_ssh_script", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = (0, combined, "")
         snap = await infrastructure.collect_health_snapshot(server)
 
     assert snap["success"] is True

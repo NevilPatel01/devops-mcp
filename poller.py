@@ -20,6 +20,7 @@ from ws_hub import ws_broadcast
 logger = logging.getLogger(__name__)
 
 _poller_task: asyncio.Task | None = None
+_stop_event: asyncio.Event | None = None
 _consecutive_critical: dict[str, int] = {}
 _last_container_statuses: dict[str, list[dict]] = {}
 _baseline_refresh_counter = 0
@@ -153,8 +154,21 @@ async def _poll_server(server: ServerConfig) -> None:
             logger.warning("Anomaly detected on %s: %s", server.id, reason)
 
     except Exception as exc:
-        logger.exception("Poller error for %s: %s", server.id, exc)
+        err_msg = str(exc).split("\n")[0][:200]
+        logger.error("Poller error for %s: %s", server.id, err_msg)
         await store.upsert_server(server.id, server.label, server.host, status="unknown")
+        await ws_broadcast(
+            {
+                "type": "snapshot_update",
+                "server_id": server.id,
+                "data": {
+                    "server_id": server.id,
+                    "label": server.label,
+                    "status": "unknown",
+                    "error": err_msg,
+                },
+            }
+        )
 
 
 async def _maybe_refresh_baselines() -> None:
@@ -174,8 +188,11 @@ async def _maybe_refresh_baselines() -> None:
 
 
 async def run_poller_loop() -> None:
+    global _stop_event
+    _stop_event = asyncio.Event()
     logger.info("Poller started")
-    while True:
+    interval = 30
+    while not _stop_event.is_set():
         try:
             cfg = load_app_config()
             interval = cfg.rules.automation.poll_interval_seconds
@@ -192,28 +209,32 @@ async def run_poller_loop() -> None:
             logger.exception("Poller loop error")
 
         try:
-            cfg = load_app_config()
-            interval = cfg.rules.automation.poll_interval_seconds
+            await asyncio.wait_for(_stop_event.wait(), timeout=interval)
+            break
+        except TimeoutError:
+            pass
         except FileNotFoundError:
-            interval = 30
-        await asyncio.sleep(interval)
+            await asyncio.sleep(30)
 
 
 async def start_poller() -> None:
     global _poller_task
     if _poller_task is not None and not _poller_task.done():
         return
-    _poller_task = asyncio.create_task(run_poller_loop())
+    _poller_task = asyncio.create_task(run_poller_loop(), name="health-poller")
     logger.info("Poller task scheduled")
 
 
 async def stop_poller() -> None:
-    global _poller_task
+    global _poller_task, _stop_event
+    if _stop_event is not None:
+        _stop_event.set()
     if _poller_task is not None:
         _poller_task.cancel()
         try:
-            await _poller_task
-        except asyncio.CancelledError:
+            await asyncio.wait_for(_poller_task, timeout=15.0)
+        except (asyncio.CancelledError, TimeoutError):
             pass
         _poller_task = None
-        logger.info("Poller stopped")
+    _stop_event = None
+    logger.info("Poller stopped")

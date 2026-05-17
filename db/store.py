@@ -163,7 +163,9 @@ def _percentile(values: list[float], pct: float) -> float | None:
     return round(sorted_v[f] + (sorted_v[c] - sorted_v[f]) * (k - f), 2)
 
 
-async def compute_baseline_p95(server_id: str, hours: int = 24) -> tuple[float | None, float | None]:
+async def compute_baseline_p95(
+    server_id: str, hours: int = 24
+) -> tuple[float | None, float | None]:
     conn = await _conn()
     cursor = await conn.execute(
         """

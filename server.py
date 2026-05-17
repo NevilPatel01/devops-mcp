@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from db import store
 from models.config import load_app_config
 from poller import start_poller, stop_poller
+from ssh_client import check_port_available
 from ws_hub import register, unregister
 
 load_dotenv()
@@ -72,7 +73,10 @@ async def mcp_sse_info() -> JSONResponse:
             "transport": "sse",
             "status": "partial",
             "phase": 1,
-            "message": "Read-only infrastructure tools available to poller. Full MCP SSE in Phase 2.",
+            "message": (
+                "Read-only infrastructure tools available to poller. "
+                "Full MCP SSE in Phase 2."
+            ),
         }
     )
 
@@ -151,6 +155,11 @@ def main() -> None:
 
     host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
     port = int(os.getenv("DASHBOARD_PORT", "8080"))
+    try:
+        check_port_available(host, port)
+    except OSError as exc:
+        logger.error("%s", exc)
+        raise SystemExit(1) from exc
     logger.info("Starting DevOps AI Agent on http://%s:%s", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info")
 
