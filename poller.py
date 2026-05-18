@@ -6,6 +6,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
+from agent import run_agent_loop
 from db import store
 from health_metrics import (
     build_server_health,
@@ -13,6 +14,7 @@ from health_metrics import (
     derive_server_status,
 )
 from models.config import ServerConfig, load_app_config
+from models.incident import AnomalyEvent
 from ssh_client import detect_compose_command, is_server_reachable
 from tools.infrastructure import collect_health_snapshot
 from ws_hub import ws_broadcast
@@ -24,6 +26,7 @@ _stop_event: asyncio.Event | None = None
 _consecutive_critical: dict[str, int] = {}
 _last_container_statuses: dict[str, list[dict]] = {}
 _baseline_refresh_counter = 0
+_last_anomaly_signature: dict[str, str] = {}
 
 
 def _utc_now_iso() -> str:
@@ -50,6 +53,47 @@ def _is_anomaly(
     if reasons:
         return True, "; ".join(reasons)
     return False, ""
+
+
+def _match_service(server: ServerConfig, container_name: str) -> str | None:
+    name_lower = container_name.lower()
+    for svc in server.services:
+        if svc.name.lower() in name_lower or name_lower in svc.name.lower():
+            return svc.name
+    return None
+
+
+def _container_anomaly(
+    server: ServerConfig, containers: list[dict]
+) -> tuple[bool, str, str | None]:
+    for c in containers:
+        status = (c.get("status") or "").lower()
+        if "exited" in status or "restarting" in status or "dead" in status:
+            name = c.get("name", "unknown")
+            svc = _match_service(server, name)
+            return True, f"Container {name} unhealthy: {c.get('status')}", svc
+    return False, "", None
+
+
+def _trigger_agent(
+    server: ServerConfig, reason: str, service_name: str | None, metrics: dict
+) -> None:
+    signature = f"{reason}|{service_name or ''}"
+    if _last_anomaly_signature.get(server.id) == signature:
+        return
+    _last_anomaly_signature[server.id] = signature
+    asyncio.create_task(
+        run_agent_loop(
+            AnomalyEvent(
+                server_id=server.id,
+                service_name=service_name,
+                reason=reason,
+                severity="high" if service_name else "medium",
+                metrics=metrics,
+            )
+        ),
+        name=f"agent-{server.id}",
+    )
 
 
 async def _poll_server(server: ServerConfig) -> None:
@@ -149,9 +193,22 @@ async def _poll_server(server: ServerConfig) -> None:
             }
         )
 
+        metrics = {
+            "cpu_percent": cpu,
+            "memory_percent": mem,
+            "disk_percent": disk,
+            "restart_events": restart_events,
+        }
         is_bad, reason = _is_anomaly(server, cpu, mem, disk, restart_events)
+        svc_from_container: str | None = None
+        if not is_bad:
+            is_bad, reason, svc_from_container = _container_anomaly(server, containers)
+
         if is_bad:
             logger.warning("Anomaly detected on %s: %s", server.id, reason)
+            _trigger_agent(server, reason, svc_from_container, metrics)
+        else:
+            _last_anomaly_signature.pop(server.id, None)
 
     except Exception as exc:
         err_msg = str(exc).split("\n")[0][:200]

@@ -28,7 +28,7 @@ async def test_health_endpoint() -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["phase"] == 1
+    assert data["phase"] == 3
 
 
 def test_servers_config_loads() -> None:

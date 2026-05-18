@@ -192,6 +192,268 @@ async def get_latest_snapshot(server_id: str) -> dict[str, Any] | None:
     row = await cursor.fetchone()
     if not row:
         return None
+    return _snapshot_row_to_dict(row)
+
+
+def _snapshot_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
     data = dict(row)
     data["container_statuses"] = json.loads(data.get("container_statuses") or "[]")
+    raw = data.get("raw_data")
+    if isinstance(raw, str):
+        data["raw_data"] = json.loads(raw or "{}")
     return data
+
+
+async def get_recent_snapshots(server_id: str, limit: int = 5) -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM snapshots WHERE server_id = ?
+        ORDER BY captured_at DESC LIMIT ?
+        """,
+        (server_id, limit),
+    )
+    rows = await cursor.fetchall()
+    return [_snapshot_row_to_dict(r) for r in rows]
+
+
+async def create_incident(
+    incident_id: str,
+    server_id: str,
+    title: str,
+    description: str,
+    severity: str,
+    service_name: str | None = None,
+) -> dict[str, Any]:
+    conn = await _conn()
+    await conn.execute(
+        """
+        INSERT INTO incidents (id, server_id, service_name, title, description, severity)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (incident_id, server_id, service_name, title, description, severity),
+    )
+    await conn.commit()
+    row = await get_incident(incident_id)
+    assert row is not None
+    return row
+
+
+async def get_incident(incident_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,))
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def list_incidents(limit: int = 50) -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM incidents ORDER BY created_at DESC LIMIT ?
+        """,
+        (limit,),
+    )
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+async def update_incident_status(
+    incident_id: str,
+    status: str,
+    *,
+    root_cause: str | None = None,
+    resolved_at: str | None = None,
+) -> None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        UPDATE incidents
+        SET status = ?, root_cause = COALESCE(?, root_cause),
+            resolved_at = COALESCE(?, resolved_at)
+        WHERE id = ?
+        """,
+        (status, root_cause, resolved_at, incident_id),
+    )
+    await conn.commit()
+
+
+async def find_similar_incidents(
+    server_id: str,
+    service_name: str | None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    conn = await _conn()
+    if service_name:
+        cursor = await conn.execute(
+            """
+            SELECT * FROM incidents
+            WHERE server_id = ? AND service_name = ?
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (server_id, service_name, limit),
+        )
+    else:
+        cursor = await conn.execute(
+            """
+            SELECT * FROM incidents WHERE server_id = ?
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (server_id, limit),
+        )
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+def _action_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
+    data = dict(row)
+    params = data.get("parameters")
+    if isinstance(params, str):
+        data["parameters"] = json.loads(params or "{}")
+    return data
+
+
+async def insert_proposed_action(
+    action_id: str,
+    *,
+    incident_id: str | None,
+    action_type: str,
+    description: str,
+    rationale: str,
+    risk_tier: str,
+    rollback_plan: str,
+    parameters: dict[str, Any],
+    stale_after_hours: int = 24,
+) -> dict[str, Any]:
+    conn = await _conn()
+    await conn.execute(
+        """
+        INSERT INTO proposed_actions (
+            id, incident_id, action_type, description, rationale, risk_tier,
+            rollback_plan, parameters, stale_after_hours
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            action_id,
+            incident_id,
+            action_type,
+            description,
+            rationale,
+            risk_tier,
+            rollback_plan,
+            json.dumps(parameters),
+            stale_after_hours,
+        ),
+    )
+    await conn.commit()
+    row = await get_proposed_action(action_id)
+    assert row is not None
+    return row
+
+
+async def get_proposed_action(action_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "SELECT * FROM proposed_actions WHERE id = ?", (action_id,)
+    )
+    row = await cursor.fetchone()
+    return _action_row_to_dict(row) if row else None
+
+
+async def get_pending_action_for_server(server_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM proposed_actions
+        WHERE status = 'pending'
+          AND json_extract(parameters, '$.server_id') = ?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (server_id,),
+    )
+    row = await cursor.fetchone()
+    return _action_row_to_dict(row) if row else None
+
+
+async def list_pending_actions() -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM proposed_actions WHERE status = 'pending'
+        ORDER BY created_at ASC
+        """
+    )
+    return [_action_row_to_dict(r) for r in await cursor.fetchall()]
+
+
+async def update_action_status(
+    action_id: str,
+    status: str,
+    *,
+    reviewer_feedback: str | None = None,
+) -> dict[str, Any] | None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        UPDATE proposed_actions
+        SET status = ?, reviewed_at = CURRENT_TIMESTAMP,
+            reviewer_feedback = COALESCE(?, reviewer_feedback)
+        WHERE id = ?
+        """,
+        (status, reviewer_feedback, action_id),
+    )
+    await conn.commit()
+    return await get_proposed_action(action_id)
+
+
+async def insert_feedback_rule(
+    action_type: str,
+    rule: str,
+    *,
+    service_name: str | None = None,
+    server_id: str | None = None,
+    created_from_action_id: str | None = None,
+) -> int:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        INSERT INTO feedback_rules (
+            action_type, service_name, server_id, rule, created_from_action_id
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (action_type, service_name, server_id, rule, created_from_action_id),
+    )
+    await conn.commit()
+    return cursor.lastrowid or 0
+
+
+async def list_feedback_rules(
+    *,
+    server_id: str | None = None,
+    service_name: str | None = None,
+) -> list[dict[str, Any]]:
+    conn = await _conn()
+    query = "SELECT * FROM feedback_rules WHERE 1=1"
+    params: list[Any] = []
+    if server_id:
+        query += " AND (server_id IS NULL OR server_id = ?)"
+        params.append(server_id)
+    if service_name:
+        query += " AND (service_name IS NULL OR service_name = ?)"
+        params.append(service_name)
+    query += " ORDER BY created_at DESC"
+    cursor = await conn.execute(query, params)
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+async def insert_action_log(
+    action_id: str,
+    output: str,
+    success: bool,
+) -> None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        INSERT INTO action_logs (action_id, output, success) VALUES (?, ?, ?)
+        """,
+        (action_id, output, success),
+    )
+    await conn.commit()
