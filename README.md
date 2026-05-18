@@ -235,6 +235,24 @@ python server.py
 # → http://127.0.0.1:8080
 ```
 
+### Setup checklist
+
+Before relying on the agent, confirm each item:
+
+| Step | Command / action |
+|------|------------------|
+| Repos | `cp config/repos.yaml.example config/repos.yaml` — edit owner/name and `linked_servers` |
+| Env | `cp .env.example .env` — set `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, optional `DATABASE_PATH` |
+| Servers | `cp config/servers.yaml.example config/servers.yaml` — SSH hosts and services |
+| Dashboard | `cd dashboard && npm install && npm run build` |
+| Server | `python server.py` (from repo root with venv active) |
+| Health | `curl -s http://127.0.0.1:8080/api/health` → `{"status":"ok",...}` |
+| Setup | `curl -s http://127.0.0.1:8080/api/setup/status` — all flags should be true when ready |
+
+The Overview page shows a **Setup checklist** banner when anything is missing (dismissible while incomplete).
+
+**Handoff shortcut:** on the dashboard, press **H** to open the oncall handoff drawer (or use **Generate handoff** in the header).
+
 **Claude Desktop (approval fallback):** copy `claude_desktop_config.json` to your Claude Desktop config and set the absolute path to `server.py`.
 
 ---

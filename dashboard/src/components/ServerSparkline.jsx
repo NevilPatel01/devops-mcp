@@ -7,6 +7,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { fetchJson } from "../api.js";
 
 const METRICS = [
   { key: "cpu", label: "CPU", color: "#38bdf8" },
@@ -20,20 +21,24 @@ export default function ServerSparkline({ serverId }) {
 
   useEffect(() => {
     if (!serverId) return undefined;
-    fetch(`/api/servers/${serverId}/snapshots?limit=48`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.success) {
-          setPoints(
-            (data.snapshots || []).map((s) => ({
-              t: s.captured_at ? new Date(s.captured_at).toLocaleTimeString() : "",
-              cpu: s.cpu_percent ?? 0,
-              mem: s.memory_percent ?? 0,
-              disk: s.disk_percent ?? 0,
-            }))
-          );
-        }
-      });
+    let cancelled = false;
+    fetchJson(`/api/servers/${serverId}/snapshots?limit=48`).then((result) => {
+      if (cancelled || !result.ok) return;
+      const data = result.data;
+      if (data?.success) {
+        setPoints(
+          (data.snapshots || []).map((s) => ({
+            t: s.captured_at ? new Date(s.captured_at).toLocaleTimeString() : "",
+            cpu: s.cpu_percent ?? 0,
+            mem: s.memory_percent ?? 0,
+            disk: s.disk_percent ?? 0,
+          }))
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [serverId]);
 
   const toggle = (key) => {

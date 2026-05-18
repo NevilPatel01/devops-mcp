@@ -21,7 +21,7 @@ from mcp.server.sse import SseServerTransport
 from approvals import approve_action_by_id, broadcast_pending_actions, reject_action_by_id
 from db import store
 from mcp_registry import initialization_options, mcp_server
-from models.config import load_app_config
+from models.config import load_app_config, load_repos_config
 from poller import start_poller, stop_poller
 from ssh_client import check_port_available
 from ws_hub import register, unregister
@@ -58,9 +58,50 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="DevOps AI Agent", version="0.4.0", lifespan=lifespan)
 
 
+def _anthropic_configured() -> bool:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    return bool(api_key) and not api_key.startswith("sk-ant-...")
+
+
+def _github_configured() -> bool:
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    return bool(token) and not token.startswith("github_pat_...")
+
+
+def build_setup_status() -> dict:
+    """Return setup checklist fields for /api/setup/status and tests."""
+    config_dir = ROOT / "config"
+    servers_path = Path(
+        os.getenv("SERVERS_CONFIG_PATH", str(config_dir / "servers.yaml"))
+    )
+    repos_path = Path(os.getenv("REPOS_CONFIG_PATH", str(config_dir / "repos.yaml")))
+    servers_configured = servers_path.is_file()
+    repos_configured = repos_path.is_file()
+    repos_count = 0
+    if repos_configured:
+        try:
+            repos_count = len(load_repos_config(repos_path).repos)
+        except Exception:
+            repos_count = 0
+    return {
+        "phase": 4,
+        "servers_configured": servers_configured,
+        "repos_configured": repos_configured,
+        "repos_count": repos_count,
+        "anthropic_configured": _anthropic_configured(),
+        "github_configured": _github_configured(),
+        "dashboard_built": (DASHBOARD_DIST / "index.html").is_file(),
+    }
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {"status": "ok", "phase": 4}
+
+
+@app.get("/api/setup/status")
+async def setup_status() -> dict:
+    return build_setup_status()
 
 
 @app.get("/api/incidents")

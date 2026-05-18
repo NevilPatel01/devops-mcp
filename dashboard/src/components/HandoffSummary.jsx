@@ -1,5 +1,8 @@
-import { useState } from "react";
-import { getStatus, send } from "../ws.js";
+import { useEffect, useRef, useState } from "react";
+import { fetchJson } from "../api.js";
+import { getStatus, on, send } from "../ws.js";
+
+const HANDOFF_TIMEOUT_MS = 90_000;
 
 export default function HandoffSummary({ open, onClose, markdown, loading }) {
   if (!open) return null;
@@ -53,36 +56,72 @@ export function useHandoff() {
   const [open, setOpen] = useState(false);
   const [markdown, setMarkdown] = useState("");
   const [loading, setLoading] = useState(false);
+  const timeoutRef = useRef(null);
+
+  const clearHandoffTimeout = () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  };
+
+  const finishHandoff = (text) => {
+    clearHandoffTimeout();
+    if (text !== undefined) setMarkdown(text);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    const offReady = on("handoff_ready", (msg) => {
+      if (msg.success === false) {
+        finishHandoff(msg.error || "Handoff failed");
+        return;
+      }
+      finishHandoff(msg.handoff_markdown || "");
+    });
+    return () => {
+      offReady();
+      clearHandoffTimeout();
+    };
+  }, []);
 
   const request = async () => {
     setOpen(true);
     setLoading(true);
     setMarkdown("");
-    if (getStatus() === "open") {
-      send({ type: "request_handoff" });
-      return;
-    }
+    clearHandoffTimeout();
+
     try {
-      const res = await fetch("/api/handoff");
-      if (!res.ok) {
-        const text = await res.text();
-        setMarkdown(
-          res.status === 404
-            ? "API not found — restart python server.py (old process may still be on port 8080)"
-            : `HTTP ${res.status}: ${text.slice(0, 120)}`
-        );
+      if (getStatus() === "open") {
+        send({ type: "request_handoff" });
+        timeoutRef.current = setTimeout(() => {
+          setLoading(false);
+          setMarkdown((prev) =>
+            prev ||
+              "Handoff timed out — check server logs or retry when WebSocket is connected."
+          );
+          timeoutRef.current = null;
+        }, HANDOFF_TIMEOUT_MS);
         return;
       }
-      const data = await res.json();
-      if (data.success) {
+
+      const result = await fetchJson("/api/handoff");
+      if (!result.ok) {
+        setMarkdown(result.error || "Handoff request failed");
+        return;
+      }
+      const data = result.data;
+      if (data?.success) {
         setMarkdown(data.handoff_markdown || "");
       } else {
-        setMarkdown(data.error || "Handoff failed");
+        setMarkdown(data?.error || "Handoff failed");
       }
     } catch (e) {
       setMarkdown(String(e));
     } finally {
-      setLoading(false);
+      if (getStatus() !== "open") {
+        setLoading(false);
+      }
     }
   };
 

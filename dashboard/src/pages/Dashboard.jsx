@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import ApprovalCard from "../components/ApprovalCard.jsx";
 import ExecutionLog from "../components/ExecutionLog.jsx";
 import HandoffSummary, { useHandoff } from "../components/HandoffSummary.jsx";
+import SetupBanner from "../components/SetupBanner.jsx";
 import IncidentDetail from "../components/IncidentDetail.jsx";
 import IncidentFeed from "../components/IncidentFeed.jsx";
 import ServerGrid from "../components/ServerGrid.jsx";
@@ -67,10 +68,6 @@ export default function Dashboard() {
       clearPending();
       setExecutingActionId(null);
     });
-    const offHandoff = on("handoff_ready", (msg) => {
-      handoff.setMarkdown(msg.handoff_markdown || "");
-      handoff.setLoading(false);
-    });
     const offIncidentCreated = on("incident_created", (msg) => {
       refreshOpenCount();
       push({
@@ -110,12 +107,11 @@ export default function Dashboard() {
       offExecuting();
       offExecuted();
       offRejected();
-      offHandoff();
       offIncidentCreated();
       offIncidentResolved();
       offPendingToast();
     };
-  }, [clearPending, handoff, push, refreshOpenCount]);
+  }, [clearPending, push, refreshOpenCount]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -161,6 +157,7 @@ export default function Dashboard() {
         </div>
       </header>
       <main className="mx-auto max-w-6xl space-y-6 px-6 py-8">
+        <SetupBanner />
         <ApprovalCard action={pendingAction} onClear={clearPending} />
         <ExecutionLog activeActionId={executingActionId} />
         <ServerGrid servers={servers} />
