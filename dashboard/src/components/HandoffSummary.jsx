@@ -95,13 +95,14 @@ export function useHandoff() {
       if (getStatus() === "open") {
         send({ type: "request_handoff" });
         timeoutRef.current = setTimeout(() => {
-          setLoading(false);
           setMarkdown((prev) =>
             prev ||
               "Handoff timed out — check server logs or retry when WebSocket is connected."
           );
           timeoutRef.current = null;
         }, HANDOFF_TIMEOUT_MS);
+        // WS path skips the HTTP fetch below; clear spinner until handoff_ready or timeout.
+        setLoading(false);
         return;
       }
 
@@ -119,9 +120,7 @@ export function useHandoff() {
     } catch (e) {
       setMarkdown(String(e));
     } finally {
-      if (getStatus() !== "open") {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   };
 
