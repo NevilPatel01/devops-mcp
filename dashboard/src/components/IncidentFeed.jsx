@@ -104,7 +104,17 @@ export default function IncidentFeed({ onSelect, showFilters = false }) {
               >
                 {inc.severity || "?"}
               </span>
-              <span className="flex-1 text-sm text-slate-200">{inc.title}</span>
+              <span className="flex-1 text-sm text-slate-200">
+                {inc.title}
+                {inc.is_sensitive ? (
+                  <span
+                    className="ml-2 rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] uppercase text-amber-300"
+                    title="Sensitive / compliance-regulated"
+                  >
+                    sensitive
+                  </span>
+                ) : null}
+              </span>
               <span className="text-xs text-slate-500">{inc.server_id}</span>
               <span className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-400">
                 {inc.status}

@@ -4,6 +4,9 @@
 protected_services:
   - primary DB
 
+compliance:
+  default_profile: none   # none | hipaa | pci
+
 servers:
   - id: droplet
     label: "DigitalOcean Droplet"
@@ -19,6 +22,7 @@ servers:
       - name: primary DB
         compose_file: /path/on/droplet/to/db/docker-compose.yml
         sensitive: true
+        compliance_profile: hipaa
     thresholds:
       cpu_percent: 80
       memory_percent: 85

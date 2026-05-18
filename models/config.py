@@ -9,10 +9,15 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+class ComplianceFileConfig(BaseModel):
+    default_profile: str = "none"
+
+
 class ServiceConfig(BaseModel):
     name: str
     compose_file: str
     sensitive: bool = False
+    compliance_profile: str | None = None
     health_check_url: str | None = None
 
 
@@ -36,6 +41,7 @@ class ServerConfig(BaseModel):
 
 class ServersFile(BaseModel):
     protected_services: list[str] = Field(default_factory=list)
+    compliance: ComplianceFileConfig = Field(default_factory=ComplianceFileConfig)
     servers: list[ServerConfig] = Field(default_factory=list)
 
 

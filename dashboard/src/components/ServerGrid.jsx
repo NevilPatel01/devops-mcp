@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ServerSparkline from "./ServerSparkline.jsx";
 
 const statusColors = {
@@ -15,7 +15,22 @@ function formatPct(value) {
 
 export default function ServerGrid({ servers = [] }) {
   const [selectedId, setSelectedId] = useState(null);
+  const [serviceMeta, setServiceMeta] = useState({});
   const selected = servers.find((s) => s.server_id === selectedId);
+
+  useEffect(() => {
+    fetch("/api/config/services")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.success) return;
+        const map = {};
+        for (const srv of data.servers || []) {
+          map[srv.server_id] = srv.services || [];
+        }
+        setServiceMeta(map);
+      })
+      .catch(() => {});
+  }, []);
 
   if (servers.length === 0) {
     return (
@@ -97,17 +112,43 @@ export default function ServerGrid({ servers = [] }) {
           <h3 className="text-sm font-medium text-slate-300">
             Containers — {selected.label || selected.server_id}
           </h3>
+          {(serviceMeta[selected.server_id] || []).some((s) => s.sensitive) && (
+            <p className="mt-2 text-xs text-amber-300/90">
+              Sensitive services:{" "}
+              {(serviceMeta[selected.server_id] || [])
+                .filter((s) => s.sensitive)
+                .map((s) => s.name)
+                .join(", ")}
+            </p>
+          )}
           {!selected.containers?.length ? (
             <p className="mt-2 text-sm text-slate-500">No container data yet.</p>
           ) : (
             <ul className="mt-3 divide-y divide-slate-800">
-              {selected.containers.map((c) => (
-                <li key={c.name} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-                  <span className="font-mono text-slate-200">{c.name}</span>
-                  <span className="text-slate-400">{c.status}</span>
-                  <span className="w-full truncate text-xs text-slate-500">{c.image}</span>
-                </li>
-              ))}
+              {selected.containers.map((c) => {
+                const cfgSvc = (serviceMeta[selected.server_id] || []).find(
+                  (s) =>
+                    c.name?.toLowerCase().includes(s.name.toLowerCase()) ||
+                    s.name.toLowerCase().includes((c.name || "").toLowerCase())
+                );
+                return (
+                  <li
+                    key={c.name}
+                    className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+                  >
+                    <span className="font-mono text-slate-200">
+                      {c.name}
+                      {cfgSvc?.sensitive && (
+                        <span className="ml-2 rounded bg-amber-900/40 px-1 text-[10px] text-amber-300">
+                          sensitive
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-slate-400">{c.status}</span>
+                    <span className="w-full truncate text-xs text-slate-500">{c.image}</span>
+                  </li>
+                );
+              })}
             </ul>
           )}
           <ServerSparkline serverId={selected.server_id} />

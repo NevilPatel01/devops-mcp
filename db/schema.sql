@@ -37,7 +37,21 @@ CREATE TABLE IF NOT EXISTS incidents (
     severity TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMP,
-    postmortem_draft TEXT
+    postmortem_draft TEXT,
+    is_sensitive INTEGER DEFAULT 0,
+    compliance_profile TEXT
+);
+
+CREATE TABLE IF NOT EXISTS compliance_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    server_id TEXT,
+    service_name TEXT,
+    incident_id TEXT,
+    action_id TEXT,
+    event_type TEXT NOT NULL,
+    actor TEXT,
+    details_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS proposed_actions (
@@ -88,3 +102,9 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_server_captured
 
 CREATE INDEX IF NOT EXISTS idx_action_logs_action_id
     ON action_logs (action_id);
+
+CREATE INDEX IF NOT EXISTS idx_compliance_audit_incident
+    ON compliance_audit_log (incident_id, timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_compliance_audit_timestamp
+    ON compliance_audit_log (timestamp);

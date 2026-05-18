@@ -9,7 +9,7 @@ from typing import Any
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
 
-from tools import cicd, executor, incident, infrastructure
+from tools import cicd, compliance, executor, incident, infrastructure
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,8 @@ _INCIDENT_TOOLS = [
     ("draft_postmortem", incident.draft_postmortem, ["incident_id"]),
     ("get_oncall_handoff", incident.get_oncall_handoff, []),
     ("get_runbook", incident.get_runbook, ["service_name", "incident_type"]),
+    ("get_compliance_context", compliance.get_compliance_context, None),
+    ("list_compliance_audit", compliance.list_compliance_audit, []),
 ]
 
 _CICD_TOOLS = [
@@ -185,6 +187,12 @@ def _tool_schema(name: str, required: list[str] | None) -> types.Tool:
             "incident_type": {"type": "string"},
         }
         req = ["service_name", "incident_type"]
+    elif name == "get_compliance_context":
+        props = {"server_id": {"type": "string"}, "service_name": {"type": "string"}}
+        req = ["server_id", "service_name"]
+    elif name == "list_compliance_audit":
+        props = {"incident_id": {"type": "string"}, "hours": {"type": "integer"}}
+        req = []
 
     return types.Tool(
         name=name,
@@ -244,6 +252,7 @@ async def call_tool(
                 payload = await fn(
                     args.get("action_id", ""),
                     confirm_text=args.get("confirm_text"),
+                    compliance_confirm_text=args.get("compliance_confirm_text"),
                 )
             else:
                 payload = await fn(**args)

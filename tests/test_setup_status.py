@@ -1,32 +1,20 @@
 """Setup status API tests."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from server import app, build_setup_status
 
 
-@pytest.fixture
-def poller_patches():
-    with (
-        patch("poller.start_poller", new_callable=AsyncMock),
-        patch("poller.stop_poller", new_callable=AsyncMock),
-        patch("approvals.broadcast_pending_actions", new_callable=AsyncMock),
-    ):
-        yield
-
-
 @pytest.mark.asyncio
-async def test_setup_status_endpoint(poller_patches) -> None:
+async def test_setup_status_endpoint() -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/setup/status")
     assert response.status_code == 200
     data = response.json()
-    assert data["phase"] == 4
+    assert data["phase"] == 6
     assert isinstance(data["servers_configured"], bool)
     assert isinstance(data["repos_configured"], bool)
     assert isinstance(data["repos_count"], int)

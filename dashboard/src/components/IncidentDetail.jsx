@@ -12,6 +12,7 @@ export default function IncidentDetail({ incident, onClose }) {
   const [error, setError] = useState(null);
   const [draftPmLoading, setDraftPmLoading] = useState(false);
   const [falsePositiveLoading, setFalsePositiveLoading] = useState(false);
+  const [compliance, setCompliance] = useState(null);
 
   const loadDetail = useCallback(async () => {
     if (!incident?.id) return;
@@ -26,8 +27,14 @@ export default function IncidentDetail({ incident, onClose }) {
         return;
       }
       const data = await res.json();
-      if (data.success) setDetail(data);
-      else setError(data.error || "Failed to load incident");
+      if (data.success) {
+        setDetail(data);
+        const cRes = await fetch(`/api/incidents/${incident.id}/compliance`);
+        if (cRes.ok) {
+          const cData = await cRes.json();
+          if (cData.success) setCompliance(cData);
+        }
+      } else setError(data.error || "Failed to load incident");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -110,6 +117,11 @@ export default function IncidentDetail({ incident, onClose }) {
             <h2 className="text-lg font-semibold text-slate-100">{incident.title}</h2>
             <p className="mt-1 text-sm text-slate-500">
               {incident.server_id} · {incident.service_name || "—"} · {incident.status}
+              {(detail?.incident?.is_sensitive || incident.is_sensitive) ? (
+                <span className="ml-2 rounded bg-amber-900/50 px-2 py-0.5 text-xs text-amber-200">
+                  sensitive
+                </span>
+              ) : null}
             </p>
           </div>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-white">
@@ -132,6 +144,28 @@ export default function IncidentDetail({ incident, onClose }) {
                     </li>
                   ))}
                 </ul>
+              </section>
+            )}
+            {(compliance?.is_sensitive || detail?.incident?.is_sensitive) && (
+              <section className="mt-4 rounded-lg border border-amber-800/50 bg-amber-950/20 p-3">
+                <h3 className="text-sm font-medium text-amber-200">Compliance impact</h3>
+                <p className="mt-1 text-xs text-amber-100/90">
+                  Profile:{" "}
+                  {compliance?.compliance_profile ||
+                    detail?.incident?.compliance_profile ||
+                    "none"}
+                  . Review audit trail and postmortem Compliance impact section before closing.
+                </p>
+                {compliance?.audit_trail?.length > 0 && (
+                  <ul className="mt-2 max-h-32 space-y-1 overflow-y-auto text-xs text-slate-400">
+                    {compliance.audit_trail.slice(0, 8).map((e) => (
+                      <li key={e.id}>
+                        {e.event_type} · {e.actor || "system"} ·{" "}
+                        {e.timestamp && new Date(e.timestamp).toLocaleString()}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </section>
             )}
             <section className="mt-4">

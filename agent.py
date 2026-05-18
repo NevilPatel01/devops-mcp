@@ -13,6 +13,11 @@ from typing import Any
 from anthropic import AsyncAnthropic
 
 from approvals import _serialize_action
+from compliance import (
+    bump_risk_for_sensitive,
+    is_sensitive_service,
+    service_compliance_meta,
+)
 from db import store
 from executor import execute_and_finalize
 from models.config import load_app_config
@@ -36,10 +41,11 @@ Rules:
    run_ssh_command | rollback_deployment (requires compose_file + service_name).
 4. parameters must include: server_id, container_name, service_name (if known)
 5. risk_tier: low | medium | high
-   - low: restart single non-sensitive container
+   - low: restart single non-sensitive container only
    - medium: compose changes, rollbacks
    - high: arbitrary SSH, data operations
-6. NEVER propose actions on protected or sensitive services listed in context.
+6. NEVER propose actions on protected_services. For sensitive_services use medium+ risk
+   and include a compliance impact sentence in rationale.
 7. Respect all feedback rules in context.
 
 Example keys: action_type, description, rationale, risk_tier, rollback_plan, parameters.
@@ -138,8 +144,12 @@ async def _maybe_auto_execute(
     risk = (action_row.get("risk_tier") or "").lower()
     params = action_row.get("parameters") or {}
     service_name = params.get("service_name")
+    server_id = params.get("server_id")
     if _is_protected(service_name, protected):
         logger.info("Skipping auto-exec: protected service %s", service_name)
+        return
+    if is_sensitive_service(server_id, service_name):
+        logger.info("Skipping auto-exec: sensitive service %s", service_name)
         return
     if risk != auto_tier:
         return
@@ -225,6 +235,24 @@ async def run_agent_loop(anomaly: AnomalyEvent) -> None:
         )
         snapshots = await store.get_recent_snapshots(anomaly.server_id, limit=5)
 
+        sensitive_services: list[dict[str, Any]] = []
+        compliance_profiles: dict[str, str] = {}
+        for srv in cfg.servers.servers:
+            if srv.id != anomaly.server_id:
+                continue
+            for svc in srv.services:
+                if svc.sensitive:
+                    profile = svc.compliance_profile or (
+                        cfg.servers.compliance.default_profile
+                    )
+                    sensitive_services.append(
+                        {"name": svc.name, "compliance_profile": profile}
+                    )
+                    compliance_profiles[svc.name] = profile
+
+        svc_meta = service_compliance_meta(
+            anomaly.server_id, anomaly.service_name
+        )
         user_payload = {
             "anomaly": {
                 "server_id": anomaly.server_id,
@@ -236,6 +264,9 @@ async def run_agent_loop(anomaly: AnomalyEvent) -> None:
             "correlation": correlation,
             "feedback_rules": [r["rule"] for r in rules],
             "protected_services": protected,
+            "sensitive_services": sensitive_services,
+            "compliance_profiles": compliance_profiles,
+            "compliance_policy_hints": svc_meta.get("policy_hints", []),
             "recent_snapshots": snapshots,
         }
         proposal = await _call_claude(json.dumps(user_payload, default=str))
@@ -252,6 +283,10 @@ async def run_agent_loop(anomaly: AnomalyEvent) -> None:
         if anomaly.service_name:
             params.setdefault("service_name", anomaly.service_name)
 
+        risk_tier = bump_risk_for_sensitive(
+            risk_tier, params.get("server_id"), params.get("service_name")
+        )
+
         if _is_protected(params.get("service_name"), protected):
             logger.warning("Claude proposed protected service — discarding")
             return
@@ -267,6 +302,22 @@ async def run_agent_loop(anomaly: AnomalyEvent) -> None:
             rollback_plan=proposal.get("rollback_plan", "Manual intervention"),
             parameters=params,
             stale_after_hours=cfg.rules.automation.stale_after_hours,
+        )
+
+        await store.insert_compliance_audit(
+            "action_proposed",
+            server_id=params.get("server_id"),
+            service_name=params.get("service_name"),
+            incident_id=incident_id,
+            action_id=action_id,
+            actor="agent",
+            details={
+                "risk_tier": risk_tier,
+                "action_type": action_type,
+                "compliance_sensitive": is_sensitive_service(
+                    params.get("server_id"), params.get("service_name")
+                ),
+            },
         )
 
         serialized = _serialize_action(action_row)

@@ -9,12 +9,18 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_PATH: /tmp/devops-ci-test.db
+      ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
+      GITHUB_TOKEN: github_pat_ci_placeholder_not_used
+      COMPLIANCE_STRICT_MODE: "true"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"  # requires-python >=3.11; 3.14 breaks pydantic-core wheels
+          python-version: "3.11"
 
       - name: Install dependencies
         run: pip install -e ".[dev]"
@@ -23,4 +29,20 @@ jobs:
         run: ruff check .
 
       - name: Pytest
-        run: pytest tests/ -v
+        run: pytest tests/ -v --tb=short --timeout=60
+
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: npm ci && npm run build

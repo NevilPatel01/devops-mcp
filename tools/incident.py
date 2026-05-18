@@ -10,6 +10,7 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
+from compliance import incident_compliance_fields
 from db import store
 from models.config import load_app_config
 from tools import cicd
@@ -27,6 +28,7 @@ async def create_incident(
 ) -> dict[str, Any]:
     try:
         incident_id = str(uuid.uuid4())
+        compliance_fields = incident_compliance_fields(server_id, service_name)
         row = await store.create_incident(
             incident_id,
             server_id,
@@ -34,6 +36,19 @@ async def create_incident(
             description,
             severity,
             service_name=service_name,
+            **compliance_fields,
+        )
+        await store.insert_compliance_audit(
+            "incident_created",
+            server_id=server_id,
+            service_name=service_name,
+            incident_id=incident_id,
+            actor="mcp",
+            details={
+                "severity": severity,
+                "is_sensitive": compliance_fields.get("is_sensitive"),
+                "compliance_profile": compliance_fields.get("compliance_profile"),
+            },
         )
         return {
             "success": True,
@@ -187,10 +202,30 @@ async def draft_postmortem(incident_id: str) -> dict[str, Any]:
             "snapshots": snapshots[-10:],
             "correlation": correlation,
         }
+        profile = incident.get("compliance_profile") or "none"
+        is_sensitive = bool(incident.get("is_sensitive"))
+        compliance_section = ""
+        if is_sensitive:
+            if profile == "hipaa":
+                compliance_section = (
+                    " Required section **Compliance impact** (HIPAA-aware): "
+                    "data exposure likelihood, audit trail references, "
+                    "access review and log retention follow-ups."
+                )
+            elif profile == "pci":
+                compliance_section = (
+                    " Required section **Compliance impact** (PCI-aware): "
+                    "CDE scope, access/log review, segmentation validation."
+                )
+            else:
+                compliance_section = (
+                    " Required section **Compliance impact**: operational audit notes "
+                    "and recommended follow-ups."
+                )
         system = (
             "Write a blameless postmortem in markdown. Sections: Timeline, Root Cause, "
-            "Impact, What went well, What went wrong, Action items. "
-            "If service is sensitive, add Compliance impact."
+            "Impact, What went well, What went wrong, Action items."
+            f"{compliance_section}"
         )
         body = await _claude_markdown(system, json.dumps(context, default=str))
         if not body:
@@ -202,6 +237,15 @@ async def draft_postmortem(incident_id: str) -> dict[str, Any]:
             )
 
         await store.update_incident_postmortem(incident_id, body)
+        if is_sensitive:
+            await store.insert_compliance_audit(
+                "postmortem_drafted",
+                server_id=incident.get("server_id"),
+                service_name=incident.get("service_name"),
+                incident_id=incident_id,
+                actor="mcp",
+                details={"compliance_profile": profile},
+            )
         return {
             "success": True,
             "error": None,
@@ -312,12 +356,19 @@ async def list_pending_approvals() -> dict[str, Any]:
         return {"success": False, "error": str(exc)}
 
 
-async def approve_action(action_id: str, confirm_text: str | None = None) -> dict[str, Any]:
+async def approve_action(
+    action_id: str,
+    confirm_text: str | None = None,
+    compliance_confirm_text: str | None = None,
+) -> dict[str, Any]:
     from approvals import approve_action_by_id
 
     try:
         return await approve_action_by_id(
-            action_id, source="mcp", confirm_text=confirm_text
+            action_id,
+            source="mcp",
+            confirm_text=confirm_text,
+            compliance_confirm_text=compliance_confirm_text,
         )
     except Exception as exc:
         return {"success": False, "error": str(exc)}

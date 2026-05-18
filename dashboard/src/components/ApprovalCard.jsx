@@ -9,6 +9,7 @@ const riskStyles = {
 
 export default function ApprovalCard({ action, onClear }) {
   const [confirmText, setConfirmText] = useState("");
+  const [complianceText, setComplianceText] = useState("");
   const [feedback, setFeedback] = useState("");
   const [showReject, setShowReject] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -17,7 +18,13 @@ export default function ApprovalCard({ action, onClear }) {
 
   const risk = (action.risk_tier || "medium").toLowerCase();
   const isHigh = risk === "high";
-  const canApprove = !isHigh || confirmText.trim().toUpperCase() === "CONFIRM";
+  const complianceSensitive = Boolean(action.compliance_sensitive);
+  const needsComplianceAck =
+    complianceSensitive && (action.requires_compliance_ack || (isHigh && complianceSensitive));
+  const confirmOk = !isHigh || confirmText.trim().toUpperCase() === "CONFIRM";
+  const complianceOk =
+    !needsComplianceAck || complianceText.trim().toUpperCase() === "COMPLIANCE";
+  const canApprove = confirmOk && complianceOk;
   const params = action.parameters || {};
 
   const approve = () => {
@@ -26,6 +33,7 @@ export default function ApprovalCard({ action, onClear }) {
       type: "approve_action",
       action_id: action.id,
       confirm_text: isHigh ? confirmText : undefined,
+      compliance_confirm_text: needsComplianceAck ? complianceText : undefined,
     });
     onClear?.();
   };
@@ -46,6 +54,17 @@ export default function ApprovalCard({ action, onClear }) {
       role="alert"
     >
       <motionHeader risk={risk} />
+      {complianceSensitive && (
+        <p className="mt-2 rounded-lg border border-amber-600/60 bg-amber-950/50 px-3 py-2 text-sm text-amber-100">
+          {action.compliance_message ||
+            "Compliance-regulated service — review audit impact before approving."}
+          {action.compliance_profile && action.compliance_profile !== "none" && (
+            <span className="ml-2 text-xs uppercase opacity-80">
+              ({action.compliance_profile})
+            </span>
+          )}
+        </p>
+      )}
       <p className="mt-2 text-sm">{action.description}</p>
       <p className="mt-2 text-xs opacity-90">
         <span className="font-medium">Rationale:</span> {action.rationale}
@@ -58,8 +77,8 @@ export default function ApprovalCard({ action, onClear }) {
       </p>
 
       {isHigh && (
-        <div className="mt-3">
-          <label className="text-xs opacity-80">Type CONFIRM to approve HIGH risk</label>
+        <motionHeaderInner>
+          <label className="w-full text-xs opacity-80">Type CONFIRM to approve HIGH risk</label>
           <input
             type="text"
             value={confirmText}
@@ -67,7 +86,22 @@ export default function ApprovalCard({ action, onClear }) {
             className="mt-1 w-full rounded border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-slate-100"
             placeholder="CONFIRM"
           />
-        </div>
+        </motionHeaderInner>
+      )}
+
+      {needsComplianceAck && (
+        <motionHeaderInner>
+          <label className="w-full text-xs text-amber-200/90">
+            Type COMPLIANCE to acknowledge compliance impact
+          </label>
+          <input
+            type="text"
+            value={complianceText}
+            onChange={(e) => setComplianceText(e.target.value)}
+            className="mt-1 w-full rounded border border-amber-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+            placeholder="COMPLIANCE"
+          />
+        </motionHeaderInner>
       )}
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -113,15 +147,15 @@ export default function ApprovalCard({ action, onClear }) {
 
 function motionHeader({ risk }) {
   return (
-    <motionHeaderInner>
+    <div className="flex items-center justify-between gap-2">
       <h2 className="text-lg font-semibold">Action pending approval</h2>
       <span className="rounded-full border border-current px-2 py-0.5 text-xs uppercase">
         {risk}
       </span>
-    </motionHeaderInner>
+    </div>
   );
 }
 
 function motionHeaderInner({ children }) {
-  return <div className="flex items-center justify-between gap-2">{children}</div>;
+  return <div className="mt-3 flex flex-col gap-1">{children}</div>;
 }

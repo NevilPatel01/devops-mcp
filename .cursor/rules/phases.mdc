@@ -31,3 +31,11 @@ Execution tools incl. `run_ssh_command`; ExecutionLog; health fail → new incid
 ## Phase 4
 
 `repos.yaml`, cicd tools, correlate + GitHub, `rollback_deployment`, postmortem, handoff drawer, recharts sparklines, false_positive UI.
+
+## Phase 5 (not started in repo)
+
+Terraform MCP (read/plan; apply gated). Spec in `docs/PHASES_5_9_PLAN.md` (local, gitignored).
+
+## Phase 6
+
+`compliance.py`, sensitive-service gates, `compliance_audit_log`, dashboard `COMPLIANCE` ack, MCP `get_compliance_context` / `list_compliance_audit`. See `docs/DECISIONS.md`.

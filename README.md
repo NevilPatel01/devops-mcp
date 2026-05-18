@@ -2,7 +2,7 @@
 
 An autonomous **DevOps AI agent** that monitors real VPS infrastructure over SSH, reasons about anomalies with Claude, proposes remediations, and executes fixes behind a **human-in-the-loop approval gate**. Built on the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), with a real-time React dashboard and Claude Desktop as a fallback approval channel.
 
-> **Status:** Phase 4 complete — GitHub correlation, rollback, postmortem, handoff, sparklines.  
+> **Status:** Phase 6 complete — compliance-aware incidents, audit trail, sensitive-service gates, dashboard banners. Phase 4 features included (GitHub correlation, rollback, postmortem, handoff). Phase 5 (Terraform MCP) is planned, not yet in this repo.  
 > **Spec:** [Project.md](Project.md) (build phases in §11).
 
 <!-- Record a screen capture (container crash → approval → live output → resolved) and save as docs/assets/demo.gif, then uncomment: -->
@@ -188,7 +188,7 @@ Executor enforces tiers even if the model mis-labels risk. Rejections become nat
 ## Project structure
 
 ```
-devops-agent/
+devops-mcp/
 ├── server.py              # Entry: FastAPI + MCP + WebSocket + static
 ├── poller.py              # 30s health loop
 ├── agent.py               # Claude observe→plan→gate loop
@@ -213,10 +213,10 @@ Full layout: [Project.md](Project.md#4-complete-file-structure).
 **Prerequisites:** Python 3.11+, Node 18+, SSH key access to VPS, Anthropic + GitHub tokens.
 
 ```bash
-git clone <your-repo-url>
-cd DevOpsAI
+git clone https://github.com/NevilPatel01/devops-mcp
+cd devops-mcp
 
-# Python 3.11+ (use 3.11 venv — 3.14 lacks pydantic wheels)
+# Python 3.11+ (use 3.11 venv — 3.14 lacks pydantic-core wheels)
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -259,23 +259,39 @@ The Overview page shows a **Setup checklist** banner when anything is missing (d
 
 ## Development
 
-Phased build order and feature checklist: **[Project.md §11](Project.md#11-build-phases)** and **`.cursor/rules/phases.mdc`**.
+Phased build order: **[docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)** (summary) and **[Project.md §11](Project.md#11-build-phases)** (full spec). Phase 6 decisions: **[docs/DECISIONS.md](docs/DECISIONS.md)**.
 
-Cursor workflow:
+### Tests (no VPS required)
 
-- Rules: `.cursor/rules/` (architecture, Python, dashboard, phases)
-- Commands: `.cursor/commands/` (e.g. **Phase 1 — Start**)
+```bash
+source .venv/bin/activate
+pip install -e ".[dev]"
+pytest tests/ -v
+ruff check .
+```
+
+CI runs the same on Python 3.11 with mocked SSH/GitHub. Optional local integration test: copy `config/servers.yaml.example` → `config/servers.yaml` and fill real hosts (`test_servers_config_loads` skips if missing).
+
+Cursor workflow: `.cursor/rules/` and `.cursor/commands/`.
 
 ---
 
 ## What I built & learned
 
-*Update after implementation.*
-
 - **MCP tool design:** Consistent `{success, error}` contracts and shared approval handlers for dashboard + Claude Desktop.
 - **Async Python:** Poller, agent, and WebSocket in one process without blocking SSH.
 - **Human-in-the-loop AI:** Risk tiers enforced at execution time, not only in prompts; rejections become durable natural-language rules.
 - **Ops realism:** SSH-only monitoring—no daemon on managed servers—mirrors how small teams run VPS today.
+- **Phase 6 compliance:** Sensitive-service tiers, audit log, dashboard `COMPLIANCE` ack for HIGH—documented in [docs/DECISIONS.md](docs/DECISIONS.md); not a certification claim.
+
+### Works offline vs needs your VPS
+
+| Works without VPS | Needs real infrastructure |
+|-------------------|---------------------------|
+| `pytest`, `ruff`, dashboard `npm run build` | `python server.py` poller + live metrics |
+| MCP tool handlers (mocked in tests) | SSH in `config/servers.yaml` |
+| Dashboard UI against empty DB | Kill/restart demo on `test-nginx` |
+| Claude planning (with `ANTHROPIC_API_KEY`) | GitHub correlation (`GITHUB_TOKEN`, `repos.yaml`) |
 
 ---
 
@@ -289,3 +305,4 @@ MIT — see [LICENSE](LICENSE).
 
 - [Project specification](Project.md)
 - [Development plan](docs/DEVELOPMENT_PLAN.md)
+- [Architecture decisions](docs/DECISIONS.md)

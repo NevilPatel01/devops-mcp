@@ -22,6 +22,44 @@ def get_db_path() -> Path:
     return _db_path
 
 
+async def _migrate_schema(conn: aiosqlite.Connection) -> None:
+    """Apply additive migrations for existing databases."""
+    cursor = await conn.execute("PRAGMA table_info(incidents)")
+    incident_cols = {row[1] for row in await cursor.fetchall()}
+    if "is_sensitive" not in incident_cols:
+        await conn.execute(
+            "ALTER TABLE incidents ADD COLUMN is_sensitive INTEGER DEFAULT 0"
+        )
+    cursor = await conn.execute("PRAGMA table_info(incidents)")
+    incident_cols = {row[1] for row in await cursor.fetchall()}
+    if "compliance_profile" not in incident_cols:
+        await conn.execute("ALTER TABLE incidents ADD COLUMN compliance_profile TEXT")
+
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='compliance_audit_log'"
+    )
+    if not await cursor.fetchone():
+        await conn.executescript(
+            """
+            CREATE TABLE compliance_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                server_id TEXT,
+                service_name TEXT,
+                incident_id TEXT,
+                action_id TEXT,
+                event_type TEXT NOT NULL,
+                actor TEXT,
+                details_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_compliance_audit_incident
+                ON compliance_audit_log (incident_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_compliance_audit_timestamp
+                ON compliance_audit_log (timestamp);
+            """
+        )
+
+
 async def init_db(db_path: Path | None = None) -> None:
     """Create database and apply schema."""
     global _connection, _db_path
@@ -33,6 +71,7 @@ async def init_db(db_path: Path | None = None) -> None:
     _connection = await aiosqlite.connect(path)
     _connection.row_factory = aiosqlite.Row
     await _connection.executescript(schema)
+    await _migrate_schema(_connection)
     await _connection.commit()
 
 
@@ -224,19 +263,107 @@ async def create_incident(
     description: str,
     severity: str,
     service_name: str | None = None,
+    *,
+    is_sensitive: int = 0,
+    compliance_profile: str | None = None,
 ) -> dict[str, Any]:
     conn = await _conn()
     await conn.execute(
         """
-        INSERT INTO incidents (id, server_id, service_name, title, description, severity)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO incidents (
+            id, server_id, service_name, title, description, severity,
+            is_sensitive, compliance_profile
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (incident_id, server_id, service_name, title, description, severity),
+        (
+            incident_id,
+            server_id,
+            service_name,
+            title,
+            description,
+            severity,
+            is_sensitive,
+            compliance_profile,
+        ),
     )
     await conn.commit()
     row = await get_incident(incident_id)
     assert row is not None
     return row
+
+
+async def insert_compliance_audit(
+    event_type: str,
+    *,
+    server_id: str | None = None,
+    service_name: str | None = None,
+    incident_id: str | None = None,
+    action_id: str | None = None,
+    actor: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> int:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        INSERT INTO compliance_audit_log (
+            server_id, service_name, incident_id, action_id,
+            event_type, actor, details_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            server_id,
+            service_name,
+            incident_id,
+            action_id,
+            event_type,
+            actor,
+            json.dumps(details or {}),
+        ),
+    )
+    await conn.commit()
+    return cursor.lastrowid or 0
+
+
+async def list_compliance_audit(
+    *,
+    incident_id: str | None = None,
+    hours: int = 24,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    conn = await _conn()
+    query = """
+        SELECT * FROM compliance_audit_log
+        WHERE timestamp >= datetime('now', ?)
+    """
+    params: list[Any] = [f"-{hours} hours"]
+    if incident_id:
+        query += " AND incident_id = ?"
+        params.append(incident_id)
+    query += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(limit)
+    cursor = await conn.execute(query, params)
+    rows = []
+    for row in await cursor.fetchall():
+        data = dict(row)
+        raw = data.get("details_json")
+        if isinstance(raw, str):
+            data["details"] = json.loads(raw or "{}")
+        rows.append(data)
+    return rows
+
+
+async def prune_compliance_audit_older_than_days(days: int = 90) -> int:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        DELETE FROM compliance_audit_log
+        WHERE timestamp < datetime('now', ?)
+        """,
+        (f"-{days} days",),
+    )
+    await conn.commit()
+    return cursor.rowcount or 0
 
 
 async def get_incident(incident_id: str) -> dict[str, Any] | None:

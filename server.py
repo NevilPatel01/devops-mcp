@@ -18,7 +18,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.sse import SseServerTransport
 
-from approvals import approve_action_by_id, broadcast_pending_actions, reject_action_by_id
+from approvals import (
+    _serialize_action,
+    approve_action_by_id,
+    broadcast_pending_actions,
+    reject_action_by_id,
+)
 from db import store
 from mcp_registry import initialization_options, mcp_server
 from models.config import load_app_config, load_repos_config
@@ -41,6 +46,7 @@ _sse_transport = SseServerTransport("/mcp/messages")
 async def lifespan(app: FastAPI):
     await store.init_db()
     await store.prune_snapshots_older_than_days(7)
+    await store.prune_compliance_audit_older_than_days(90)
     try:
         cfg = load_app_config()
         for s in cfg.servers.servers:
@@ -84,7 +90,7 @@ def build_setup_status() -> dict:
         except Exception:
             repos_count = 0
     return {
-        "phase": 4,
+        "phase": 6,
         "servers_configured": servers_configured,
         "repos_configured": repos_configured,
         "repos_count": repos_count,
@@ -96,7 +102,7 @@ def build_setup_status() -> dict:
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "phase": 4}
+    return {"status": "ok", "phase": 6}
 
 
 @app.get("/api/setup/status")
@@ -151,6 +157,66 @@ async def api_handoff() -> dict:
     from tools import incident as incident_tools
 
     return await incident_tools.get_oncall_handoff()
+
+
+@app.get("/api/incidents/{incident_id}/compliance")
+async def api_incident_compliance(incident_id: str) -> JSONResponse:
+    incident = await store.get_incident(incident_id)
+    if not incident:
+        return JSONResponse(
+            {"success": False, "error": "Not found"}, status_code=404
+        )
+    audit = await store.list_compliance_audit(incident_id=incident_id, hours=168)
+    return JSONResponse(
+        {
+            "success": True,
+            "incident_id": incident_id,
+            "is_sensitive": bool(incident.get("is_sensitive")),
+            "compliance_profile": incident.get("compliance_profile") or "none",
+            "audit_trail": audit,
+        }
+    )
+
+
+@app.get("/api/compliance/audit")
+async def api_compliance_audit(hours: int = 24) -> dict:
+    entries = await store.list_compliance_audit(hours=max(1, min(hours, 168)))
+    return {"success": True, "entries": entries}
+
+
+@app.get("/api/config/services")
+async def api_config_services() -> dict:
+    try:
+        cfg = load_app_config()
+    except FileNotFoundError as exc:
+        return {"success": False, "error": str(exc), "servers": []}
+    servers_out = []
+    for srv in cfg.servers.servers:
+        servers_out.append(
+            {
+                "server_id": srv.id,
+                "label": srv.label,
+                "services": [
+                    {
+                        "name": svc.name,
+                        "sensitive": svc.sensitive,
+                        "compliance_profile": svc.compliance_profile
+                        or (
+                            cfg.servers.compliance.default_profile
+                            if svc.sensitive
+                            else "none"
+                        ),
+                    }
+                    for svc in srv.services
+                ],
+            }
+        )
+    return {
+        "success": True,
+        "protected_services": cfg.servers.protected_services,
+        "default_compliance_profile": cfg.servers.compliance.default_profile,
+        "servers": servers_out,
+    }
 
 
 @app.get("/api/servers/{server_id}/snapshots")
@@ -227,25 +293,14 @@ async def _send_latest_snapshots(websocket: WebSocket) -> None:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await register(websocket)
-    await websocket.send_json({"type": "connected", "phase": 4})
+    await websocket.send_json({"type": "connected", "phase": 6})
     try:
         await _send_latest_snapshots(websocket)
         for row in await store.list_pending_actions():
             await websocket.send_json(
                 {
                     "type": "action_pending",
-                    "action": {
-                        "id": row["id"],
-                        "incident_id": row.get("incident_id"),
-                        "action_type": row["action_type"],
-                        "description": row["description"],
-                        "rationale": row["rationale"],
-                        "risk_tier": row["risk_tier"],
-                        "rollback_plan": row["rollback_plan"],
-                        "parameters": row.get("parameters") or {},
-                        "status": row.get("status"),
-                        "created_at": row.get("created_at"),
-                    },
+                    "action": _serialize_action(row),
                 }
             )
     except Exception as exc:
@@ -261,6 +316,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     data.get("action_id", ""),
                     source="dashboard",
                     confirm_text=data.get("confirm_text"),
+                    compliance_confirm_text=data.get("compliance_confirm_text"),
                 )
                 await websocket.send_json({"type": "approve_result", **result})
             elif msg_type == "reject_action":

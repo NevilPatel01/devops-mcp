@@ -6,6 +6,7 @@ import logging
 import shlex
 from typing import Any
 
+from compliance import compliance_strict_mode, resolve_service_name, service_compliance_meta
 from models.config import ServerConfig, load_servers_config
 from ssh_client import detect_compose_command, get_compose_command, run_ssh
 from tools.infrastructure import collect_health_snapshot, list_containers
@@ -61,16 +62,26 @@ async def _guard_execution(
             "success": False,
             "error": f"Service '{svc_name}' is protected — execution blocked",
         }
-    if container_name:
-        for svc in server.services:
-            if svc.sensitive and (
-                svc_name == svc.name
-                or svc.name.lower() in container_name.lower()
-            ):
-                return {
-                    "success": False,
-                    "error": f"Sensitive service '{svc.name}' — execution blocked",
-                }
+
+    resolved = resolve_service_name(
+        server, service_name=svc_name, container_name=container_name
+    )
+    meta = service_compliance_meta(
+        server.id if server else None,
+        resolved,
+        container_name=container_name,
+    )
+    if meta["sensitive"] and not approved:
+        if compliance_strict_mode():
+            return {
+                "success": False,
+                "error": (
+                    f"Sensitive service '{resolved or svc_name}' requires "
+                    "dashboard approval before execution"
+                ),
+                "compliance_sensitive": True,
+                "compliance_profile": meta["compliance_profile"],
+            }
     return None
 
 
