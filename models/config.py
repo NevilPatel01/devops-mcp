@@ -57,9 +57,23 @@ class RulesFile(BaseModel):
     risk_overrides: list[RiskOverride] = Field(default_factory=list)
 
 
+class RepoConfig(BaseModel):
+    id: str
+    owner: str
+    name: str
+    default_branch: str = "main"
+    linked_servers: list[str] = Field(default_factory=list)
+    linked_services: list[str] = Field(default_factory=list)
+
+
+class ReposFile(BaseModel):
+    repos: list[RepoConfig] = Field(default_factory=list)
+
+
 class AppConfig(BaseModel):
     servers: ServersFile
     rules: RulesFile
+    repos: ReposFile = Field(default_factory=ReposFile)
 
 
 def _config_root() -> Path:
@@ -85,5 +99,33 @@ def load_rules_config(path: Path | None = None) -> RulesFile:
     return RulesFile.model_validate(data)
 
 
+def load_repos_config(path: Path | None = None) -> ReposFile:
+    config_path = path or Path(os.getenv("REPOS_CONFIG_PATH", _config_root() / "repos.yaml"))
+    if not config_path.exists():
+        return ReposFile(repos=[])
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    return ReposFile.model_validate(data)
+
+
 def load_app_config() -> AppConfig:
-    return AppConfig(servers=load_servers_config(), rules=load_rules_config())
+    return AppConfig(
+        servers=load_servers_config(),
+        rules=load_rules_config(),
+        repos=load_repos_config(),
+    )
+
+
+def repos_for_server_service(
+    repos: ReposFile, server_id: str, service_name: str | None
+) -> list[RepoConfig]:
+    matched: list[RepoConfig] = []
+    for repo in repos.repos:
+        if server_id not in repo.linked_servers:
+            continue
+        if repo.linked_services and service_name:
+            if service_name not in repo.linked_services:
+                continue
+        elif repo.linked_services and not service_name:
+            continue
+        matched.append(repo)
+    return matched

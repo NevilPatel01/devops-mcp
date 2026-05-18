@@ -236,11 +236,83 @@ async def rollback_deployment(
     action_id: str,
     approved: bool = False,
 ) -> dict[str, Any]:
-    return {
-        "success": False,
-        "error": "rollback_deployment is Phase 4 only",
-        "action_id": action_id,
-    }
+    try:
+        server = _get_server(server_id)
+        blocked = await _guard_execution(
+            server, service_name=service_name, approved=approved
+        )
+        if blocked:
+            blocked["action_id"] = action_id
+            return blocked
+
+        from db import store
+
+        container_hint = service_name.replace(" ", "-").lower()
+        previous_image = await store.get_last_healthy_image(server_id, container_hint)
+        if not previous_image:
+            for c in (await store.get_latest_snapshot(server_id) or {}).get(
+                "container_statuses"
+            ) or []:
+                if service_name.lower() in (c.get("name") or "").lower():
+                    container_hint = c.get("name", container_hint)
+                    previous_image = await store.get_last_healthy_image(
+                        server_id, container_hint
+                    )
+                    break
+        if not previous_image:
+            return {
+                "success": False,
+                "error": "No healthy snapshot image found for rollback",
+                "action_id": action_id,
+            }
+
+        compose = get_compose_command(server_id) or await detect_compose_command(server)
+        safe_image = previous_image.replace("'", "'\\''")
+        safe_file = compose_file.replace("'", "'\\''")
+        safe_svc = service_name.replace("'", "'\\''")
+        patch_cmd = (
+            f"cp '{safe_file}' '{safe_file}.bak.{action_id}' && "
+            f"awk -v svc='{safe_svc}' -v img='{safe_image}' '"
+            "/^[[:space:]]+[a-zA-Z0-9_.-]+:/ { in_block=($0 ~ \"^[[:space:]]+\" svc \":\") } "
+            "in_block && /^[[:space:]]+image:/ { "
+            "sub(/image:.*/, \"image: \" img); in_block=0 } { print }' "
+            f"'{safe_file}' > '{safe_file}.tmp' && mv '{safe_file}.tmp' '{safe_file}'"
+        )
+        up_cmd = f"{compose} -f '{safe_file}' up -d '{safe_svc}'"
+        await _log_line(action_id, f"$ # rollback to image {previous_image}\n")
+        await _log_line(action_id, f"$ {patch_cmd}\n")
+        code, out, err = await run_ssh(server, patch_cmd)
+        output = (out or "") + (err or "")
+        await _log_line(action_id, output or f"patch exit {code}\n")
+        if code != 0:
+            return {
+                "success": False,
+                "error": err or f"compose patch failed exit {code}",
+                "output": output,
+                "action_id": action_id,
+            }
+        await _log_line(action_id, f"$ {up_cmd}\n")
+        code2, out2, err2 = await run_ssh(server, up_cmd)
+        output2 = (out2 or "") + (err2 or "")
+        await _log_line(action_id, output2 or f"up exit {code2}\n")
+        if code2 != 0:
+            return {
+                "success": False,
+                "error": err2 or f"compose up failed exit {code2}",
+                "output": output + output2,
+                "action_id": action_id,
+            }
+        return {
+            "success": True,
+            "error": None,
+            "output": output + output2,
+            "previous_image": previous_image,
+            "current_image": previous_image,
+            "action_id": action_id,
+        }
+    except Exception as exc:
+        logger.warning("rollback_deployment failed: %s", exc)
+        return {"success": False, "error": str(exc), "action_id": action_id}
 
 
 async def snapshot_container_states(server_id: str) -> dict[str, Any]:

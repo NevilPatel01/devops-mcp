@@ -116,16 +116,46 @@ def get_compose_command(server_id: str) -> str | None:
     return _compose_command.get(server_id)
 
 
+def _process_on_port(port: int) -> str | None:
+    """Return 'pid command' for the listener on port, if any."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    lines = [ln for ln in out.stdout.strip().splitlines() if ln and not ln.startswith("COMMAND")]
+    if not lines:
+        return None
+    parts = lines[0].split()
+    if len(parts) < 2:
+        return lines[0]
+    pid, cmd = parts[1], parts[0]
+    return f"PID {pid} ({cmd})"
+
+
 def check_port_available(host: str, port: int) -> None:
     """Fail fast with a clear message if the dashboard port is taken."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.bind((host, port))
     except OSError as exc:
+        occupant = _process_on_port(port)
+        if occupant and occupant.startswith("PID"):
+            stop_hint = f"kill {occupant.split()[1]}"
+        else:
+            stop_hint = f"lsof -i :{port}"
+        occupant_line = f" Occupied by {occupant}." if occupant else ""
         hint = (
-            f"Port {host}:{port} is already in use. "
-            f"Stop the other process: lsof -i :{port}  "
-            f"or set DASHBOARD_PORT in .env (e.g. 8081)."
+            f"Port {host}:{port} is already in use.{occupant_line} "
+            f"Stop the old server: {stop_hint} — then run: python server.py "
+            f"(Or set DASHBOARD_PORT=8081 in .env.)"
         )
         raise OSError(hint) from exc
     finally:

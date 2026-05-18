@@ -20,15 +20,42 @@ async def test_init_db(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_health_endpoint() -> None:
+    from unittest.mock import AsyncMock, patch
+
     from server import app
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/health")
+    with (
+        patch("poller.start_poller", new_callable=AsyncMock),
+        patch("poller.stop_poller", new_callable=AsyncMock),
+        patch("approvals.broadcast_pending_actions", new_callable=AsyncMock),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["phase"] == 3
+    assert data["phase"] == 4
+
+
+@pytest.mark.asyncio
+async def test_api_incidents_not_shadowed_by_static() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from server import app
+
+    with (
+        patch("poller.start_poller", new_callable=AsyncMock),
+        patch("poller.stop_poller", new_callable=AsyncMock),
+        patch("approvals.broadcast_pending_actions", new_callable=AsyncMock),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/incidents")
+    assert response.status_code == 200
+    body = response.json()
+    assert body.get("success") is True
+    assert "incidents" in body
 
 
 def test_servers_config_loads() -> None:

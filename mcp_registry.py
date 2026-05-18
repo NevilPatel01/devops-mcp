@@ -9,7 +9,7 @@ from typing import Any
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
 
-from tools import executor, incident, infrastructure
+from tools import cicd, executor, incident, infrastructure
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,14 @@ _INCIDENT_TOOLS = [
     ("draft_postmortem", incident.draft_postmortem, ["incident_id"]),
     ("get_oncall_handoff", incident.get_oncall_handoff, []),
     ("get_runbook", incident.get_runbook, ["service_name", "incident_type"]),
+]
+
+_CICD_TOOLS = [
+    ("get_latest_workflow_run", cicd.get_latest_workflow_run, ["repo"]),
+    ("get_failed_step_logs", cicd.get_failed_step_logs, ["repo", "run_id"]),
+    ("get_recent_commits", cicd.get_recent_commits, ["repo"]),
+    ("get_deployment_diff", cicd.get_deployment_diff, ["repo", "base_sha", "head_sha"]),
+    ("trigger_workflow", cicd.trigger_workflow, None),
 ]
 
 _EXEC_TOOLS = [
@@ -143,6 +151,40 @@ def _tool_schema(name: str, required: list[str] | None) -> types.Tool:
             "approved": {"type": "boolean"},
         }
         req = ["server_id", "service_name", "compose_file", "action_id"]
+    elif name == "get_latest_workflow_run":
+        props = {"repo": {"type": "string"}, "branch": {"type": "string"}}
+        req = ["repo"]
+    elif name == "get_failed_step_logs":
+        props = {"repo": {"type": "string"}, "run_id": {"type": "integer"}}
+        req = ["repo", "run_id"]
+    elif name == "get_recent_commits":
+        props = {"repo": {"type": "string"}, "n": {"type": "integer"}}
+        req = ["repo"]
+    elif name == "get_deployment_diff":
+        props = {
+            "repo": {"type": "string"},
+            "base_sha": {"type": "string"},
+            "head_sha": {"type": "string"},
+        }
+        req = ["repo", "base_sha", "head_sha"]
+    elif name == "trigger_workflow":
+        props = {
+            "repo": {"type": "string"},
+            "workflow_id": {"type": "string"},
+            "ref": {"type": "string"},
+            "action_id": {"type": "string"},
+            "approved": {"type": "boolean"},
+        }
+        req = ["repo", "workflow_id"]
+    elif name == "draft_postmortem":
+        props = {"incident_id": {"type": "string"}}
+        req = ["incident_id"]
+    elif name == "get_runbook":
+        props = {
+            "service_name": {"type": "string"},
+            "incident_type": {"type": "string"},
+        }
+        req = ["service_name", "incident_type"]
 
     return types.Tool(
         name=name,
@@ -166,6 +208,8 @@ for entry in _INFRA_TOOLS:
     _register(entry[0], entry[1])
 for entry in _INCIDENT_TOOLS:
     _register(entry[0], entry[1])
+for entry in _CICD_TOOLS:
+    _register(entry[0], entry[1])
 for entry in _EXEC_TOOLS:
     _register(entry[0], entry[1])
 
@@ -176,6 +220,8 @@ async def list_tools() -> list[types.Tool]:
     for entry in _INFRA_TOOLS:
         tools.append(_tool_schema(entry[0], entry[2]))
     for entry in _INCIDENT_TOOLS:
+        tools.append(_tool_schema(entry[0], entry[2]))
+    for entry in _CICD_TOOLS:
         tools.append(_tool_schema(entry[0], entry[2]))
     for entry in _EXEC_TOOLS:
         tools.append(_tool_schema(entry[0], entry[2]))

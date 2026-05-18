@@ -100,8 +100,23 @@ async def _post_action_health_check(action: ProposedAction) -> tuple[bool, str]:
             return False, f"Unhealthy containers after compose: {', '.join(unhealthy[:5])}"
         return True, "Compose services running"
 
-    if action.action_type == "run_ssh_command":
-        return True, "SSH command completed (no automatic health probe)"
+    if action.action_type in ("run_ssh_command", "rollback_deployment"):
+        if action.action_type == "run_ssh_command":
+            return True, "SSH command completed (no automatic health probe)"
+
+    if action.action_type == "rollback_deployment":
+        service_name = params.get("service_name")
+        if service_name:
+            snap = await collect_health_snapshot(server)
+            if not snap.get("success"):
+                return False, snap.get("error") or "Post-rollback snapshot failed"
+            for c in snap.get("containers") or []:
+                if service_name.lower() in (c.get("name") or "").lower():
+                    status = (c.get("status") or "").lower()
+                    if "up" in status and "exited" not in status:
+                        return True, f"Service running after rollback: {c.get('status')}"
+            return False, "Service not healthy after rollback"
+        return True, "Rollback completed"
 
     return True, "No health check configured for action type"
 
@@ -252,14 +267,26 @@ async def execute_and_finalize(action: ProposedAction) -> dict[str, Any]:
     result["health_message"] = health_msg
 
     if health_ok:
+        postmortem_md = None
         if action.incident_id:
             await store.update_incident_status(action.incident_id, "resolved")
+            pm = await incident_tools.draft_postmortem(action.incident_id)
+            if pm.get("success"):
+                postmortem_md = pm.get("postmortem_markdown")
+            await ws_broadcast(
+                {
+                    "type": "incident_resolved",
+                    "incident_id": action.incident_id,
+                    "postmortem_markdown": postmortem_md,
+                }
+            )
         await ws_broadcast(
             {
                 "type": "action_executed",
                 "action_id": action.id,
                 "output": result.get("output", ""),
                 "health_ok": True,
+                "postmortem_markdown": postmortem_md,
             }
         )
     else:

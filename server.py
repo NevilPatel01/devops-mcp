@@ -13,8 +13,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.sse import SseServerTransport
 
@@ -55,18 +55,79 @@ async def lifespan(app: FastAPI):
     await store.close_db()
 
 
-app = FastAPI(title="DevOps AI Agent", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="DevOps AI Agent", version="0.4.0", lifespan=lifespan)
 
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "phase": 3}
+    return {"status": "ok", "phase": 4}
 
 
 @app.get("/api/incidents")
 async def api_incidents() -> dict:
     incidents = await store.list_incidents(limit=50)
     return {"success": True, "incidents": incidents}
+
+
+@app.get("/api/incidents/{incident_id}")
+async def api_incident_detail(incident_id: str) -> JSONResponse:
+    incident = await store.get_incident(incident_id)
+    if not incident:
+        return JSONResponse(
+            {"success": False, "error": "Not found"}, status_code=404
+        )
+    actions = await store.get_actions_for_incident(incident_id)
+    logs_by_action = {}
+    for action in actions:
+        logs_by_action[action["id"]] = await store.get_action_logs(action["id"])
+    return JSONResponse(
+        {
+            "success": True,
+            "incident": incident,
+            "actions": actions,
+            "action_logs": logs_by_action,
+        }
+    )
+
+
+@app.post("/api/incidents/{incident_id}/false-positive")
+async def api_false_positive(incident_id: str) -> dict:
+    row = await store.mark_incident_false_positive(incident_id)
+    if not row:
+        return {"success": False, "error": "Not found"}
+    return {"success": True, "incident": row}
+
+
+@app.post("/api/incidents/{incident_id}/postmortem")
+async def api_draft_postmortem(incident_id: str) -> dict:
+    from tools import incident as incident_tools
+
+    return await incident_tools.draft_postmortem(incident_id)
+
+
+@app.get("/api/handoff")
+async def api_handoff() -> dict:
+    from tools import incident as incident_tools
+
+    return await incident_tools.get_oncall_handoff()
+
+
+@app.get("/api/servers/{server_id}/snapshots")
+async def api_snapshot_history(server_id: str, limit: int = 48) -> dict:
+    history = await store.get_snapshot_history(server_id, limit=min(limit, 200))
+    return {
+        "success": True,
+        "server_id": server_id,
+        "snapshots": [
+            {
+                "captured_at": s.get("captured_at"),
+                "cpu_percent": s.get("cpu_percent"),
+                "memory_percent": s.get("memory_percent"),
+                "disk_percent": s.get("disk_percent"),
+            }
+            for s in reversed(history)
+        ],
+    }
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -125,7 +186,7 @@ async def _send_latest_snapshots(websocket: WebSocket) -> None:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await register(websocket)
-    await websocket.send_json({"type": "connected", "phase": 3})
+    await websocket.send_json({"type": "connected", "phase": 4})
     try:
         await _send_latest_snapshots(websocket)
         for row in await store.list_pending_actions():
@@ -168,11 +229,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 )
                 await websocket.send_json({"type": "reject_result", **result})
             elif msg_type == "request_handoff":
+                from tools import incident as incident_tools
+
+                handoff = await incident_tools.get_oncall_handoff()
                 await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": "request_handoff available from Phase 4",
-                    }
+                    {"type": "handoff_ready", **handoff}
                 )
             else:
                 await websocket.send_json(
@@ -184,14 +245,41 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await unregister(websocket)
 
 
+_RESERVED_SPA_PREFIXES = frozenset({"api", "ws", "mcp"})
+
+
 def _mount_dashboard() -> None:
-    if DASHBOARD_DIST.is_dir() and (DASHBOARD_DIST / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=str(DASHBOARD_DIST), html=True), name="dashboard")
-        logger.info("Serving dashboard from %s", DASHBOARD_DIST)
-    else:
+    """Serve Vite build without mounting '/' (that shadows /api/* on some Starlette versions)."""
+    if not DASHBOARD_DIST.is_dir() or not (DASHBOARD_DIST / "index.html").is_file():
         logger.warning(
             "Dashboard not built. Run: cd dashboard && npm install && npm run build"
         )
+        return
+
+    assets_dir = DASHBOARD_DIST / "assets"
+    if assets_dir.is_dir():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(assets_dir)),
+            name="dashboard-assets",
+        )
+
+    # SPA fallback must be registered last (after /api, /ws, /mcp).
+    @app.get("/", include_in_schema=False)
+    async def dashboard_index() -> FileResponse:
+        return FileResponse(DASHBOARD_DIST / "index.html")
+
+    @app.get("/{spa_path:path}", include_in_schema=False)
+    async def dashboard_spa(spa_path: str) -> FileResponse:
+        first = spa_path.split("/", 1)[0] if spa_path else ""
+        if first in _RESERVED_SPA_PREFIXES:
+            raise HTTPException(status_code=404, detail="Not found")
+        target = DASHBOARD_DIST / spa_path
+        if spa_path and target.is_file():
+            return FileResponse(target)
+        return FileResponse(DASHBOARD_DIST / "index.html")
+
+    logger.info("Serving dashboard from %s", DASHBOARD_DIST)
 
 
 _mount_dashboard()

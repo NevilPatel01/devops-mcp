@@ -457,3 +457,134 @@ async def insert_action_log(
         (action_id, output, success),
     )
     await conn.commit()
+
+
+async def get_actions_for_incident(incident_id: str) -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM proposed_actions WHERE incident_id = ?
+        ORDER BY created_at ASC
+        """,
+        (incident_id,),
+    )
+    return [_action_row_to_dict(r) for r in await cursor.fetchall()]
+
+
+async def get_action_logs(action_id: str) -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM action_logs WHERE action_id = ? ORDER BY timestamp ASC
+        """,
+        (action_id,),
+    )
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+async def update_incident_postmortem(incident_id: str, postmortem: str) -> None:
+    conn = await _conn()
+    await conn.execute(
+        "UPDATE incidents SET postmortem_draft = ? WHERE id = ?",
+        (postmortem, incident_id),
+    )
+    await conn.commit()
+
+
+async def mark_incident_false_positive(incident_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        UPDATE incidents SET status = 'false_positive', resolved_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (incident_id,),
+    )
+    await conn.commit()
+    return await get_incident(incident_id)
+
+
+async def get_runbook(
+    service_name: str, incident_type: str
+) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM runbooks
+        WHERE service_name = ? AND incident_type = ?
+        ORDER BY updated_at DESC LIMIT 1
+        """,
+        (service_name, incident_type),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    steps = data.get("steps")
+    if isinstance(steps, str):
+        data["steps"] = json.loads(steps or "[]")
+    return data
+
+
+async def list_recent_actions(hours: int = 8, limit: int = 50) -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM proposed_actions
+        WHERE created_at >= datetime('now', ?)
+        ORDER BY created_at DESC LIMIT ?
+        """,
+        (f"-{hours} hours", limit),
+    )
+    return [_action_row_to_dict(r) for r in await cursor.fetchall()]
+
+
+async def list_open_incidents() -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM incidents
+        WHERE status IN ('open', 'investigating')
+        ORDER BY created_at DESC
+        """
+    )
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+async def get_snapshot_history(
+    server_id: str, limit: int = 48
+) -> list[dict[str, Any]]:
+    return await get_recent_snapshots(server_id, limit=limit)
+
+
+async def get_last_healthy_image(
+    server_id: str, container_name: str, *, lookback: int = 200
+) -> str | None:
+    """Previous image from last healthy snapshot (Phase 4 rollback)."""
+    snaps = await get_recent_snapshots(server_id, limit=lookback)
+    name_lower = container_name.lower()
+    for snap in snaps:
+        for c in snap.get("container_statuses") or []:
+            cname = (c.get("name") or "").lower()
+            status = (c.get("status") or "").lower()
+            if (cname == name_lower or name_lower in cname) and "up" in status:
+                if "exited" not in status and "restarting" not in status:
+                    image = c.get("image")
+                    if image:
+                        return image
+    return None
+
+
+async def get_snapshots_for_incident_window(
+    server_id: str, minutes: int = 30, limit: int = 50
+) -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM snapshots
+        WHERE server_id = ? AND captured_at >= datetime('now', ?)
+        ORDER BY captured_at DESC LIMIT ?
+        """,
+        (server_id, f"-{minutes} minutes", limit),
+    )
+    return [_snapshot_row_to_dict(r) for r in await cursor.fetchall()]

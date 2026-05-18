@@ -2,10 +2,10 @@
 
 An autonomous **DevOps AI agent** that monitors real VPS infrastructure over SSH, reasons about anomalies with Claude, proposes remediations, and executes fixes behind a **human-in-the-loop approval gate**. Built on the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), with a real-time React dashboard and Claude Desktop as a fallback approval channel.
 
-> **Status:** Phase 1 complete — live SSH poller + dashboard. Phase 2 next. See [docs/DECISIONS.md](docs/DECISIONS.md).  
-> **Spec:** [Project.md](Project.md) · **Plan:** [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)
+> **Status:** Phase 4 complete — GitHub correlation, rollback, postmortem, handoff, sparklines.  
+> **Spec:** [Project.md](Project.md) (build phases in §11).
 
-<!-- Replace when Phase 3 demo is recorded -->
+<!-- Record a screen capture (container crash → approval → live output → resolved) and save as docs/assets/demo.gif, then uncomment: -->
 <!-- ![Demo](docs/assets/demo.gif) -->
 
 ---
@@ -224,10 +224,11 @@ pip install -e ".[dev]"
 # Dashboard
 cd dashboard && npm install && npm run build && cd ..
 
-# Config (servers.yaml is gitignored)
+# Config (servers.yaml and repos.yaml are gitignored)
 cp .env.example .env
 cp config/servers.yaml.example config/servers.yaml
-# Edit config/servers.yaml — linode FlexInk path, droplet when ready
+cp config/repos.yaml.example config/repos.yaml
+# Edit servers.yaml (SSH hosts) and repos.yaml (GitHub owner/name + linked_servers)
 
 # Run
 python server.py
@@ -240,7 +241,7 @@ python server.py
 
 ## Development
 
-Phased build order and feature checklist: **[docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)**.
+Phased build order and feature checklist: **[Project.md §11](Project.md#11-build-phases)** and **`.cursor/rules/phases.mdc`**.
 
 Cursor workflow:
 
@@ -262,7 +263,7 @@ Cursor workflow:
 
 ## License
 
-TBD — add license before public publish.
+MIT — see [LICENSE](LICENSE).
 
 ---
 

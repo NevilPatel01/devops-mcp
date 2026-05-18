@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import uuid
 from typing import Any
 
+from anthropic import AsyncAnthropic
+
 from db import store
 from models.config import load_app_config
+from tools import cicd
 
 logger = logging.getLogger(__name__)
+POSTMORTEM_MODEL = "claude-sonnet-4-5"
 
 
 async def create_incident(
@@ -52,7 +58,9 @@ async def correlate_incident(
         if minutes_back <= 0:
             minutes_back = window
 
-        snapshots = await store.get_recent_snapshots(server_id, limit=20)
+        snapshots = await store.get_snapshots_for_incident_window(
+            server_id, minutes=minutes_back
+        )
         timeline = []
         for snap in snapshots:
             timeline.append(
@@ -69,8 +77,11 @@ async def correlate_incident(
             server_id=server_id, service_name=service_name
         )
         similar = await store.find_similar_incidents(server_id, service_name, limit=5)
+        github_ctx = await cicd.gather_deploy_context(
+            server_id, service_name, minutes_back=minutes_back
+        )
 
-        likely_cause = "Unknown — correlate without GitHub in Phase 2"
+        likely_cause = "Unknown"
         if timeline:
             latest = timeline[0]
             containers = latest.get("containers") or []
@@ -84,12 +95,21 @@ async def correlate_incident(
                 names = ", ".join(c.get("name", "?") for c in unhealthy[:3])
                 likely_cause = f"Unhealthy containers detected: {names}"
 
+        related = github_ctx.get("related_deploy")
+        if related:
+            likely_cause = (
+                f"Recent GitHub Actions run on {related.get('repo_id')}: "
+                f"{related.get('conclusion') or related.get('status')} "
+                f"({related.get('created_at')})"
+            )
+
         return {
             "success": True,
             "error": None,
             "timeline": timeline,
             "likely_cause": likely_cause,
-            "related_deploy": None,
+            "related_deploy": related,
+            "github_timeline": github_ctx.get("github_timeline"),
             "similar_incidents": similar,
             "rules_to_respect": [r["rule"] for r in rules],
             "minutes_back": minutes_back,
@@ -119,16 +139,155 @@ async def store_feedback_rule(
         return {"success": False, "error": str(exc)}
 
 
-async def draft_postmortem(incident_id: str) -> dict:
-    return {"success": False, "error": "Not implemented until Phase 4"}
+async def _claude_markdown(system: str, user: str) -> str | None:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key or api_key.startswith("sk-ant-..."):
+        return None
+    client = AsyncAnthropic(api_key=api_key)
+    response = await client.messages.create(
+        model=POSTMORTEM_MODEL,
+        max_tokens=2048,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    parts = [b.text for b in response.content if hasattr(b, "text")]
+    return "".join(parts).strip() or None
 
 
-async def get_oncall_handoff() -> dict:
-    return {"success": False, "error": "Not implemented until Phase 4"}
+async def draft_postmortem(incident_id: str) -> dict[str, Any]:
+    try:
+        incident = await store.get_incident(incident_id)
+        if not incident:
+            return {"success": False, "error": f"Unknown incident_id: {incident_id}"}
+
+        actions = await store.get_actions_for_incident(incident_id)
+        logs = []
+        for action in actions:
+            for log in await store.get_action_logs(action["id"]):
+                logs.append(
+                    {
+                        "action_id": action["id"],
+                        "success": log.get("success"),
+                        "output": (log.get("output") or "")[:2000],
+                    }
+                )
+
+        snapshots = await store.get_snapshots_for_incident_window(
+            incident["server_id"], minutes=60, limit=30
+        )
+        correlation = await correlate_incident(
+            incident["server_id"],
+            incident.get("service_name") or "unknown",
+        )
+
+        context = {
+            "incident": incident,
+            "actions": actions,
+            "action_logs": logs,
+            "snapshots": snapshots[-10:],
+            "correlation": correlation,
+        }
+        system = (
+            "Write a blameless postmortem in markdown. Sections: Timeline, Root Cause, "
+            "Impact, What went well, What went wrong, Action items. "
+            "If service is sensitive, add Compliance impact."
+        )
+        body = await _claude_markdown(system, json.dumps(context, default=str))
+        if not body:
+            body = (
+                f"# Postmortem — {incident.get('title')}\n\n"
+                f"**Status:** {incident.get('status')}\n\n"
+                f"{incident.get('description')}\n\n"
+                "_Auto-draft unavailable (ANTHROPIC_API_KEY missing)._"
+            )
+
+        await store.update_incident_postmortem(incident_id, body)
+        return {
+            "success": True,
+            "error": None,
+            "postmortem_markdown": body,
+            "incident_id": incident_id,
+        }
+    except Exception as exc:
+        logger.warning("draft_postmortem failed: %s", exc)
+        return {"success": False, "error": str(exc)}
 
 
-async def get_runbook(service_name: str, incident_type: str) -> dict:
-    return {"success": False, "error": "Not implemented until Phase 4"}
+async def get_oncall_handoff() -> dict[str, Any]:
+    try:
+        from datetime import UTC, datetime
+
+        open_incidents = await store.list_open_incidents()
+        pending = await store.list_pending_actions()
+        recent_actions = await store.list_recent_actions(hours=8)
+        cfg = load_app_config()
+
+        repo_status = []
+        for repo in cfg.repos.repos:
+            run = await cicd.get_latest_workflow_run(repo.id, repo.default_branch)
+            repo_status.append(
+                {
+                    "repo_id": repo.id,
+                    "workflow": run if run.get("success") else {"error": run.get("error")},
+                }
+            )
+
+        payload = {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "open_incidents": open_incidents,
+            "pending_approvals": pending,
+            "recent_actions": recent_actions,
+            "repo_workflows": repo_status,
+        }
+        system = (
+            "Write an on-call handoff summary in markdown for the next shift. "
+            "Cover open incidents, pending approvals, recent actions, and CI status."
+        )
+        md = await _claude_markdown(system, json.dumps(payload, default=str))
+        if not md:
+            lines = [
+                "# Oncall handoff",
+                f"Generated: {payload['generated_at']}",
+                "",
+                f"## Open incidents ({len(open_incidents)})",
+            ]
+            for inc in open_incidents[:10]:
+                lines.append(f"- **{inc.get('title')}** ({inc.get('server_id')})")
+            lines.append(f"\n## Pending approvals ({len(pending)})")
+            for a in pending[:10]:
+                lines.append(f"- {a.get('description')} [{a.get('risk_tier')}]")
+            md = "\n".join(lines)
+
+        return {
+            "success": True,
+            "error": None,
+            "handoff_markdown": md,
+            "generated_at": payload["generated_at"],
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def get_runbook(service_name: str, incident_type: str) -> dict[str, Any]:
+    try:
+        row = await store.get_runbook(service_name, incident_type)
+        if not row:
+            return {
+                "success": True,
+                "error": None,
+                "found": False,
+                "steps": [],
+                "auto_executable": False,
+            }
+        return {
+            "success": True,
+            "error": None,
+            "found": True,
+            "steps": row.get("steps") or [],
+            "auto_executable": bool(row.get("auto_executable")),
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 async def list_pending_approvals() -> dict[str, Any]:

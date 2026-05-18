@@ -1,4 +1,5 @@
 import { useState } from "react";
+import ServerSparkline from "./ServerSparkline.jsx";
 
 const statusColors = {
   healthy: "bg-emerald-900/60 text-emerald-300",
@@ -109,6 +110,7 @@ export default function ServerGrid({ servers = [] }) {
               ))}
             </ul>
           )}
+          <ServerSparkline serverId={selected.server_id} />
         </div>
       )}
     </section>

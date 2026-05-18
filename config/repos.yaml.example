@@ -2,12 +2,13 @@
 # MCP tools use `id` (e.g. api-backend); owner/name resolved in tools/cicd.py.
 
 repos:
-  - id: YOUR_REPO_ID
+  - id: flexink-api
     owner: YOUR_GITHUB_USERNAME_OR_ORG
     name: YOUR_REPO_NAME
     default_branch: main
     linked_servers:
-      - droplet
+      - fct-droplet
       - linode
     linked_services:
-      - YOUR_COMPOSE_SERVICE_NAME
+      - test-nginx
+      - FlexInk

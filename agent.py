@@ -32,8 +32,8 @@ Analyse the anomaly and context, then propose ONE specific remediation.
 Rules:
 1. Output ONLY valid JSON (no markdown fences, no prose).
 2. Fields: action_type, description, rationale, risk_tier, rollback_plan, parameters
-3. action_type: restart_container | run_compose_command | scale_service | run_ssh_command
-   (rollback_deployment is Phase 4 only).
+3. action_type: restart_container | run_compose_command | scale_service |
+   run_ssh_command | rollback_deployment (requires compose_file + service_name).
 4. parameters must include: server_id, container_name, service_name (if known)
 5. risk_tier: low | medium | high
    - low: restart single non-sensitive container
