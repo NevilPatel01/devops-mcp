@@ -1,10 +1,12 @@
 import { useState } from "react";
 import Dashboard from "./pages/Dashboard.jsx";
 import Incidents from "./pages/Incidents.jsx";
+import Terraform from "./pages/Terraform.jsx";
 
 const views = [
   { id: "dashboard", label: "Overview" },
   { id: "incidents", label: "Incidents" },
+  { id: "terraform", label: "Terraform" },
 ];
 
 export default function App() {
@@ -30,7 +32,9 @@ export default function App() {
           ))}
         </div>
       </nav>
-      {view === "dashboard" ? <Dashboard /> : <Incidents />}
+      {view === "dashboard" && <Dashboard />}
+      {view === "incidents" && <Incidents />}
+      {view === "terraform" && <Terraform />}
     </div>
   );
 }

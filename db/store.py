@@ -59,6 +59,72 @@ async def _migrate_schema(conn: aiosqlite.Connection) -> None:
             """
         )
 
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='terraform_analyses'"
+    )
+    if not await cursor.fetchone():
+        await conn.executescript(
+            """
+            CREATE TABLE terraform_analyses (
+                id TEXT PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                plan_digest TEXT,
+                resource_change_count INTEGER,
+                overall_risk_score REAL,
+                summary_json TEXT,
+                summary_markdown TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_terraform_analyses_created
+                ON terraform_analyses (created_at DESC);
+            """
+        )
+
+    for table_sql in (
+        """
+        CREATE TABLE IF NOT EXISTS suppression_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id TEXT NOT NULL,
+            service_name TEXT,
+            pattern_type TEXT NOT NULL,
+            pattern_json TEXT NOT NULL,
+            created_from_incident_id TEXT,
+            expires_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_suppression_server_expires
+            ON suppression_patterns (server_id, expires_at);
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS service_alert_fatigue (
+            server_id TEXT NOT NULL,
+            service_name TEXT NOT NULL,
+            false_positive_count INTEGER DEFAULT 0,
+            true_positive_count INTEGER DEFAULT 0,
+            fatigue_score REAL DEFAULT 0.0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (server_id, service_name)
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS service_baselines (
+            server_id TEXT NOT NULL,
+            service_name TEXT NOT NULL,
+            cpu_p95 REAL,
+            memory_p95 REAL,
+            restart_rate_p95 REAL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (server_id, service_name)
+        );
+        """,
+    ):
+        name = table_sql.split("EXISTS ")[1].split(" ")[0]
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (name,),
+        )
+        if not await cursor.fetchone():
+            await conn.executescript(table_sql)
+
 
 async def init_db(db_path: Path | None = None) -> None:
     """Create database and apply schema."""
@@ -200,6 +266,15 @@ def _percentile(values: list[float], pct: float) -> float | None:
     if f == c:
         return round(sorted_v[f], 2)
     return round(sorted_v[f] + (sorted_v[c] - sorted_v[f]) * (k - f), 2)
+
+
+async def get_baseline(server_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "SELECT * FROM baselines WHERE server_id = ?", (server_id,)
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
 
 
 async def compute_baseline_p95(
@@ -364,6 +439,45 @@ async def prune_compliance_audit_older_than_days(days: int = 90) -> int:
     )
     await conn.commit()
     return cursor.rowcount or 0
+
+
+async def insert_terraform_analysis(
+    *,
+    analysis_id: str,
+    plan_digest: str,
+    resource_change_count: int,
+    overall_risk_score: float,
+    summary_json: dict[str, Any],
+    summary_markdown: str,
+) -> None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        INSERT INTO terraform_analyses (
+            id, plan_digest, resource_change_count,
+            overall_risk_score, summary_json, summary_markdown
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            analysis_id,
+            plan_digest,
+            resource_change_count,
+            overall_risk_score,
+            json.dumps(summary_json),
+            summary_markdown,
+        ),
+    )
+    await conn.commit()
+
+
+async def get_terraform_analysis(analysis_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "SELECT * FROM terraform_analyses WHERE id = ?",
+        (analysis_id,),
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
 
 
 async def get_incident(incident_id: str) -> dict[str, Any] | None:
@@ -629,6 +743,190 @@ async def mark_incident_false_positive(incident_id: str) -> dict[str, Any] | Non
     )
     await conn.commit()
     return await get_incident(incident_id)
+
+
+async def upsert_service_baseline(
+    server_id: str,
+    service_name: str,
+    *,
+    cpu_p95: float | None = None,
+    memory_p95: float | None = None,
+    restart_rate_p95: float | None = None,
+) -> None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        INSERT INTO service_baselines (
+            server_id, service_name, cpu_p95, memory_p95, restart_rate_p95, updated_at
+        ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(server_id, service_name) DO UPDATE SET
+            cpu_p95 = COALESCE(excluded.cpu_p95, service_baselines.cpu_p95),
+            memory_p95 = COALESCE(excluded.memory_p95, service_baselines.memory_p95),
+            restart_rate_p95 = COALESCE(
+                excluded.restart_rate_p95, service_baselines.restart_rate_p95
+            ),
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (server_id, service_name, cpu_p95, memory_p95, restart_rate_p95),
+    )
+    await conn.commit()
+
+
+async def insert_suppression_pattern(
+    *,
+    server_id: str,
+    service_name: str | None,
+    pattern_type: str,
+    pattern_json: dict[str, Any],
+    created_from_incident_id: str | None = None,
+    expires_at: str | None = None,
+) -> int:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        INSERT INTO suppression_patterns (
+            server_id, service_name, pattern_type, pattern_json,
+            created_from_incident_id, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            server_id,
+            service_name,
+            pattern_type,
+            json.dumps(pattern_json),
+            created_from_incident_id,
+            expires_at,
+        ),
+    )
+    await conn.commit()
+    return cursor.lastrowid or 0
+
+
+async def list_suppression_patterns(
+    server_id: str | None = None, *, active_only: bool = True
+) -> list[dict[str, Any]]:
+    conn = await _conn()
+    query = "SELECT * FROM suppression_patterns WHERE 1=1"
+    params: list[Any] = []
+    if server_id:
+        query += " AND server_id = ?"
+        params.append(server_id)
+    if active_only:
+        query += " AND (expires_at IS NULL OR expires_at > datetime('now'))"
+    query += " ORDER BY created_at DESC"
+    cursor = await conn.execute(query, params)
+    rows = []
+    for row in await cursor.fetchall():
+        data = dict(row)
+        raw = data.get("pattern_json")
+        if isinstance(raw, str):
+            data["pattern"] = json.loads(raw or "{}")
+        rows.append(data)
+    return rows
+
+
+async def delete_suppression_pattern(pattern_id: int) -> bool:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "DELETE FROM suppression_patterns WHERE id = ?", (pattern_id,)
+    )
+    await conn.commit()
+    return (cursor.rowcount or 0) > 0
+
+
+def _suppression_applies_to_service(
+    pattern_service: str | None,
+    anomaly_service: str | None,
+) -> bool:
+    """Scoped patterns (service set) only match that service; unset matches all."""
+    if not pattern_service:
+        return True
+    if not anomaly_service:
+        return False
+    return pattern_service == anomaly_service
+
+
+async def is_anomaly_suppressed(
+    server_id: str,
+    signature: str,
+    service_name: str | None = None,
+) -> bool:
+    patterns = await list_suppression_patterns(server_id, active_only=True)
+    for p in patterns:
+        if p.get("pattern_type") != "anomaly_signature":
+            continue
+        pattern_service = p.get("service_name") or None
+        if not _suppression_applies_to_service(pattern_service, service_name):
+            continue
+        pat = p.get("pattern") or {}
+        if pat.get("signature") == signature:
+            return True
+        reason = pat.get("reason") or ""
+        if reason and reason in signature:
+            return True
+    return False
+
+
+async def increment_alert_fatigue(
+    server_id: str,
+    service_name: str,
+    *,
+    false_positive: bool = False,
+    true_positive: bool = False,
+) -> dict[str, Any]:
+    from anomaly_detection import compute_fatigue_score
+
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM service_alert_fatigue
+        WHERE server_id = ? AND service_name = ?
+        """,
+        (server_id, service_name),
+    )
+    row = await cursor.fetchone()
+    fp = (row["false_positive_count"] if row else 0) + (1 if false_positive else 0)
+    tp = (row["true_positive_count"] if row else 0) + (1 if true_positive else 0)
+    score = compute_fatigue_score(fp, tp)
+    await conn.execute(
+        """
+        INSERT INTO service_alert_fatigue (
+            server_id, service_name, false_positive_count,
+            true_positive_count, fatigue_score, updated_at
+        ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(server_id, service_name) DO UPDATE SET
+            false_positive_count = excluded.false_positive_count,
+            true_positive_count = excluded.true_positive_count,
+            fatigue_score = excluded.fatigue_score,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (server_id, service_name, fp, tp, score),
+    )
+    await conn.commit()
+    return await get_alert_fatigue(server_id, service_name) or {}
+
+
+async def get_alert_fatigue(
+    server_id: str, service_name: str
+) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM service_alert_fatigue
+        WHERE server_id = ? AND service_name = ?
+        """,
+        (server_id, service_name),
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def list_alert_fatigue() -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "SELECT * FROM service_alert_fatigue ORDER BY fatigue_score DESC"
+    )
+    return [dict(r) for r in await cursor.fetchall()]
 
 
 async def get_runbook(

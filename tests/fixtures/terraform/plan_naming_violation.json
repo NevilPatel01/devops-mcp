@@ -1,0 +1,32 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.5.0",
+  "resource_changes": [
+    {
+      "address": "azurerm_linux_virtual_machine.Bad_Name",
+      "mode": "managed",
+      "type": "azurerm_linux_virtual_machine",
+      "name": "Bad_Name",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "tags": {}
+        }
+      }
+    },
+    {
+      "address": "azurerm_storage_account.UPPER",
+      "mode": "managed",
+      "type": "azurerm_storage_account",
+      "name": "UPPER",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {}
+      }
+    }
+  ]
+}

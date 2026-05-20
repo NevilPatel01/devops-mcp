@@ -1,0 +1,14 @@
+# Copy to config/rules.yaml (optional — defaults apply if missing)
+
+automation:
+  poll_interval_seconds: 30
+  auto_execute_risk_tier: low
+  correlation_window_minutes: 30
+
+anomaly:
+  baseline_margin: 1.15
+  use_baseline_detection: true
+
+false_positive:
+  default_suppression_hours: 24
+  fatigue_decay_days: 30

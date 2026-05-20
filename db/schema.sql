@@ -108,3 +108,50 @@ CREATE INDEX IF NOT EXISTS idx_compliance_audit_incident
 
 CREATE INDEX IF NOT EXISTS idx_compliance_audit_timestamp
     ON compliance_audit_log (timestamp);
+
+CREATE TABLE IF NOT EXISTS terraform_analyses (
+    id TEXT PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    plan_digest TEXT,
+    resource_change_count INTEGER,
+    overall_risk_score REAL,
+    summary_json TEXT,
+    summary_markdown TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_terraform_analyses_created
+    ON terraform_analyses (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS suppression_patterns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id TEXT NOT NULL,
+    service_name TEXT,
+    pattern_type TEXT NOT NULL,
+    pattern_json TEXT NOT NULL,
+    created_from_incident_id TEXT,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS service_alert_fatigue (
+    server_id TEXT NOT NULL,
+    service_name TEXT NOT NULL,
+    false_positive_count INTEGER DEFAULT 0,
+    true_positive_count INTEGER DEFAULT 0,
+    fatigue_score REAL DEFAULT 0.0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (server_id, service_name)
+);
+
+CREATE TABLE IF NOT EXISTS service_baselines (
+    server_id TEXT NOT NULL,
+    service_name TEXT NOT NULL,
+    cpu_p95 REAL,
+    memory_p95 REAL,
+    restart_rate_p95 REAL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (server_id, service_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_suppression_server_expires
+    ON suppression_patterns (server_id, expires_at);

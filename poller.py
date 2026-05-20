@@ -7,6 +7,7 @@ import logging
 from datetime import UTC, datetime
 
 from agent import run_agent_loop
+from anomaly_detection import anomaly_signature, is_metric_above_threshold
 from db import store
 from health_metrics import (
     build_server_health,
@@ -33,19 +34,28 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
-def _is_anomaly(
+async def _is_anomaly(
     server: ServerConfig,
     cpu: float | None,
     mem: float | None,
     disk: float | None,
     restart_events: int,
+    *,
+    baseline_cpu: float | None = None,
+    baseline_mem: float | None = None,
+    margin: float = 1.15,
+    use_baseline: bool = True,
 ) -> tuple[bool, str]:
     t = server.thresholds
     reasons = []
-    if cpu is not None and cpu > t.cpu_percent:
-        reasons.append(f"CPU {cpu}% > {t.cpu_percent}%")
-    if mem is not None and mem > t.memory_percent:
-        reasons.append(f"Memory {mem}% > {t.memory_percent}%")
+    if is_metric_above_threshold(
+        cpu, t.cpu_percent, baseline_cpu, margin=margin, use_baseline=use_baseline
+    ):
+        reasons.append(f"CPU {cpu}% above threshold")
+    if is_metric_above_threshold(
+        mem, t.memory_percent, baseline_mem, margin=margin, use_baseline=use_baseline
+    ):
+        reasons.append(f"Memory {mem}% above threshold")
     if disk is not None and disk > t.disk_percent:
         reasons.append(f"Disk {disk}% > {t.disk_percent}%")
     if restart_events >= t.container_restart_count:
@@ -75,11 +85,14 @@ def _container_anomaly(
     return False, "", None
 
 
-def _trigger_agent(
+async def _trigger_agent(
     server: ServerConfig, reason: str, service_name: str | None, metrics: dict
 ) -> None:
-    signature = f"{reason}|{service_name or ''}"
+    signature = anomaly_signature(reason, service_name)
     if _last_anomaly_signature.get(server.id) == signature:
+        return
+    if await store.is_anomaly_suppressed(server.id, signature, service_name):
+        logger.info("Anomaly suppressed on %s: %s", server.id, signature[:80])
         return
     _last_anomaly_signature[server.id] = signature
     asyncio.create_task(
@@ -199,14 +212,35 @@ async def _poll_server(server: ServerConfig) -> None:
             "disk_percent": disk,
             "restart_events": restart_events,
         }
-        is_bad, reason = _is_anomaly(server, cpu, mem, disk, restart_events)
+        try:
+            cfg = load_app_config()
+            anomaly_cfg = cfg.rules.anomaly
+        except FileNotFoundError:
+            anomaly_cfg = None
+        margin = anomaly_cfg.baseline_margin if anomaly_cfg else 1.15
+        use_baseline = anomaly_cfg.use_baseline_detection if anomaly_cfg else True
+        baseline_row = await store.get_baseline(server.id)
+        baseline_cpu = baseline_row.get("cpu_p95") if baseline_row else None
+        baseline_mem = baseline_row.get("memory_p95") if baseline_row else None
+
+        is_bad, reason = await _is_anomaly(
+            server,
+            cpu,
+            mem,
+            disk,
+            restart_events,
+            baseline_cpu=baseline_cpu,
+            baseline_mem=baseline_mem,
+            margin=margin,
+            use_baseline=use_baseline,
+        )
         svc_from_container: str | None = None
         if not is_bad:
             is_bad, reason, svc_from_container = _container_anomaly(server, containers)
 
         if is_bad:
             logger.warning("Anomaly detected on %s: %s", server.id, reason)
-            _trigger_agent(server, reason, svc_from_container, metrics)
+            await _trigger_agent(server, reason, svc_from_container, metrics)
         else:
             _last_anomaly_signature.pop(server.id, None)
 

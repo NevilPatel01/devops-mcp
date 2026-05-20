@@ -2,7 +2,7 @@
 
 An autonomous **DevOps AI agent** that monitors real VPS infrastructure over SSH, reasons about anomalies with Claude, proposes remediations, and executes fixes behind a **human-in-the-loop approval gate**. Built on the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), with a real-time React dashboard and Claude Desktop as a fallback approval channel.
 
-> **Status:** Phase 6 complete — compliance-aware incidents, audit trail, sensitive-service gates, dashboard banners. Phase 4 features included (GitHub correlation, rollback, postmortem, handoff). Phase 5 (Terraform MCP) is planned, not yet in this repo.  
+> **Status:** Phases 0–6 and **8** complete (Terraform plan analyser, compliance, false-positive learning + baseline anomalies). Phase 7 (runbooks) and Phase 9 (demo mode) planned — see `docs/PHASES_5_9_PLAN.md`.  
 > **Spec:** [Project.md](Project.md) (build phases in §11).
 
 <!-- Record a screen capture (container crash → approval → live output → resolved) and save as docs/assets/demo.gif, then uncomment: -->

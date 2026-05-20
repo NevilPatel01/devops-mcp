@@ -9,7 +9,15 @@ from typing import Any
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
 
-from tools import cicd, compliance, executor, incident, infrastructure
+from tools import (
+    cicd,
+    compliance,
+    executor,
+    false_positive,
+    incident,
+    infrastructure,
+    terraform,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +52,9 @@ _INCIDENT_TOOLS = [
     ("get_runbook", incident.get_runbook, ["service_name", "incident_type"]),
     ("get_compliance_context", compliance.get_compliance_context, None),
     ("list_compliance_audit", compliance.list_compliance_audit, []),
+    ("mark_false_positive", false_positive.mark_false_positive, ["incident_id"]),
+    ("list_suppression_patterns", false_positive.list_suppression_patterns, []),
+    ("clear_suppression_pattern", false_positive.clear_suppression_pattern, ["pattern_id"]),
 ]
 
 _CICD_TOOLS = [
@@ -52,6 +63,11 @@ _CICD_TOOLS = [
     ("get_recent_commits", cicd.get_recent_commits, ["repo"]),
     ("get_deployment_diff", cicd.get_deployment_diff, ["repo", "base_sha", "head_sha"]),
     ("trigger_workflow", cicd.trigger_workflow, None),
+]
+
+_TERRAFORM_TOOLS = [
+    ("analyze_terraform_plan", terraform.analyze_terraform_plan, None),
+    ("get_terraform_analysis", terraform.get_terraform_analysis, ["analysis_id"]),
 ]
 
 _EXEC_TOOLS = [
@@ -193,6 +209,29 @@ def _tool_schema(name: str, required: list[str] | None) -> types.Tool:
     elif name == "list_compliance_audit":
         props = {"incident_id": {"type": "string"}, "hours": {"type": "integer"}}
         req = []
+    elif name == "mark_false_positive":
+        props = {
+            "incident_id": {"type": "string"},
+            "reason": {"type": "string"},
+            "suppress_similar_hours": {"type": "integer"},
+        }
+        req = ["incident_id"]
+    elif name == "list_suppression_patterns":
+        props = {"server_id": {"type": "string"}}
+        req = []
+    elif name == "clear_suppression_pattern":
+        props = {"pattern_id": {"type": "integer"}}
+        req = ["pattern_id"]
+    elif name == "analyze_terraform_plan":
+        props = {
+            "plan_json": {"type": "string"},
+            "plan_path": {"type": "string"},
+            "rules_profile": {"type": "string"},
+        }
+        req = []
+    elif name == "get_terraform_analysis":
+        props = {"analysis_id": {"type": "string"}}
+        req = ["analysis_id"]
 
     return types.Tool(
         name=name,
@@ -220,6 +259,8 @@ for entry in _CICD_TOOLS:
     _register(entry[0], entry[1])
 for entry in _EXEC_TOOLS:
     _register(entry[0], entry[1])
+for entry in _TERRAFORM_TOOLS:
+    _register(entry[0], entry[1])
 
 
 @mcp_server.list_tools()
@@ -230,6 +271,8 @@ async def list_tools() -> list[types.Tool]:
     for entry in _INCIDENT_TOOLS:
         tools.append(_tool_schema(entry[0], entry[2]))
     for entry in _CICD_TOOLS:
+        tools.append(_tool_schema(entry[0], entry[2]))
+    for entry in _TERRAFORM_TOOLS:
         tools.append(_tool_schema(entry[0], entry[2]))
     for entry in _EXEC_TOOLS:
         tools.append(_tool_schema(entry[0], entry[2]))

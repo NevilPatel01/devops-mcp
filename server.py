@@ -7,16 +7,18 @@ Run: python server.py
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.sse import SseServerTransport
+from pydantic import BaseModel, Field
 
 from approvals import (
     _serialize_action,
@@ -90,7 +92,7 @@ def build_setup_status() -> dict:
         except Exception:
             repos_count = 0
     return {
-        "phase": 6,
+        "phase": 8,
         "servers_configured": servers_configured,
         "repos_configured": repos_configured,
         "repos_count": repos_count,
@@ -102,7 +104,7 @@ def build_setup_status() -> dict:
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "phase": 6}
+    return {"status": "ok", "phase": 8}
 
 
 @app.get("/api/setup/status")
@@ -137,12 +139,54 @@ async def api_incident_detail(incident_id: str) -> JSONResponse:
     )
 
 
+class FalsePositiveBody(BaseModel):
+    reason: str | None = None
+    suppress_similar_hours: int | None = Field(default=None, ge=0, le=168)
+
+
 @app.post("/api/incidents/{incident_id}/false-positive")
-async def api_false_positive(incident_id: str) -> dict:
-    row = await store.mark_incident_false_positive(incident_id)
-    if not row:
+async def api_false_positive(
+    incident_id: str,
+    body: FalsePositiveBody = Body(default_factory=FalsePositiveBody),
+) -> dict:
+    from false_positive_handler import process_false_positive
+    from ws_hub import ws_broadcast
+
+    result = await process_false_positive(
+        incident_id,
+        reason=body.reason,
+        suppress_similar_hours=body.suppress_similar_hours,
+        actor="dashboard",
+    )
+    if result.get("success") and result.get("suppression_id"):
+        await ws_broadcast(
+            {
+                "type": "suppression_created",
+                "incident_id": incident_id,
+                "suppression_id": result["suppression_id"],
+            }
+        )
+    return result
+
+
+@app.get("/api/services/fatigue")
+async def api_services_fatigue() -> dict:
+    scores = await store.list_alert_fatigue()
+    return {"success": True, "services": scores}
+
+
+@app.get("/api/suppressions")
+async def api_list_suppressions(server_id: str | None = None) -> dict:
+    patterns = await store.list_suppression_patterns(server_id, active_only=True)
+    return {"success": True, "patterns": patterns, "count": len(patterns)}
+
+
+@app.delete("/api/suppressions/{pattern_id}")
+async def api_delete_suppression(pattern_id: int) -> dict:
+    ok = await store.delete_suppression_pattern(pattern_id)
+    if not ok:
         return {"success": False, "error": "Not found"}
-    return {"success": True, "incident": row}
+    return {"success": True}
 
 
 @app.post("/api/incidents/{incident_id}/postmortem")
@@ -182,6 +226,40 @@ async def api_incident_compliance(incident_id: str) -> JSONResponse:
 async def api_compliance_audit(hours: int = 24) -> dict:
     entries = await store.list_compliance_audit(hours=max(1, min(hours, 168)))
     return {"success": True, "entries": entries}
+
+
+@app.post("/api/terraform/analyze")
+async def api_terraform_analyze(request: Request) -> JSONResponse:
+    from tools import terraform as terraform_tools
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        return JSONResponse(
+            {"success": False, "error": "JSON body required"}, status_code=400
+        )
+    plan_json = body.get("plan_json")
+    if plan_json is not None and not isinstance(plan_json, str):
+        plan_json = json.dumps(plan_json)
+    result = await terraform_tools.analyze_terraform_plan(
+        plan_json=plan_json,
+        plan_path=body.get("plan_path"),
+        rules_profile=body.get("rules_profile"),
+    )
+    status = 200 if result.get("success") else 400
+    return JSONResponse(result, status_code=status)
+
+
+@app.get("/api/terraform/analyses/{analysis_id}")
+async def api_terraform_analysis(analysis_id: str) -> JSONResponse:
+    from tools import terraform as terraform_tools
+
+    result = await terraform_tools.get_terraform_analysis(analysis_id)
+    if not result.get("success"):
+        return JSONResponse(result, status_code=404)
+    return JSONResponse(result)
 
 
 @app.get("/api/config/services")
@@ -293,7 +371,7 @@ async def _send_latest_snapshots(websocket: WebSocket) -> None:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await register(websocket)
-    await websocket.send_json({"type": "connected", "phase": 6})
+    await websocket.send_json({"type": "connected", "phase": 8})
     try:
         await _send_latest_snapshots(websocket)
         for row in await store.list_pending_actions():

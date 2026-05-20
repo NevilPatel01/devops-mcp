@@ -1,0 +1,18 @@
+# Copy to terraform_rules.yaml and customize (or set TERRAFORM_RULES_PATH).
+# Azure / azurerm provider conventions.
+naming:
+  azurerm_linux_virtual_machine_prefix: "vm-"
+  required_tags: ["Environment", "Owner"]
+  regex_by_resource_type:
+    azurerm_storage_account: "^[a-z0-9]{3,24}$"
+risk_weights:
+  delete: 10
+  replace: 8
+  create: 2
+  update: 3
+  no-op: 0
+flagged_actions: ["delete", "replace"]
+sensitive_resource_types:
+  - azurerm_postgresql_flexible_server
+  - azurerm_mssql_database
+  - azurerm_mysql_flexible_server

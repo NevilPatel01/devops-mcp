@@ -8,6 +8,21 @@ const statusColors = {
   unknown: "bg-slate-700 text-slate-300",
 };
 
+function fatigueBadge(score) {
+  if (score == null || score <= 0) return null;
+  const cls =
+    score >= 60
+      ? "bg-red-900/40 text-red-300"
+      : score >= 30
+        ? "bg-amber-900/40 text-amber-300"
+        : "bg-slate-800 text-slate-400";
+  return (
+    <span className={`ml-2 rounded px-1 text-[10px] ${cls}`} title="Alert fatigue score">
+      fatigue {Math.round(score)}
+    </span>
+  );
+}
+
 function formatPct(value) {
   if (value == null || Number.isNaN(value)) return "—";
   return `${Number(value).toFixed(1)}%`;
@@ -16,7 +31,23 @@ function formatPct(value) {
 export default function ServerGrid({ servers = [] }) {
   const [selectedId, setSelectedId] = useState(null);
   const [serviceMeta, setServiceMeta] = useState({});
+  const [fatigueMap, setFatigueMap] = useState({});
   const selected = servers.find((s) => s.server_id === selectedId);
+
+  useEffect(() => {
+    fetch("/api/services/fatigue")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.success) return;
+        const map = {};
+        for (const row of data.services || []) {
+          const key = `${row.server_id}:${row.service_name}`;
+          map[key] = row.fatigue_score ?? 0;
+        }
+        setFatigueMap(map);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch("/api/config/services")
@@ -143,6 +174,10 @@ export default function ServerGrid({ servers = [] }) {
                           sensitive
                         </span>
                       )}
+                      {cfgSvc?.name &&
+                        fatigueBadge(
+                          fatigueMap[`${selected.server_id}:${cfgSvc.name}`]
+                        )}
                     </span>
                     <span className="text-slate-400">{c.status}</span>
                     <span className="w-full truncate text-xs text-slate-500">{c.image}</span>

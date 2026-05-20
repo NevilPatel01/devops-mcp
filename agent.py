@@ -12,6 +12,7 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
+from anomaly_detection import anomaly_signature
 from approvals import _serialize_action
 from compliance import (
     bump_risk_for_sensitive,
@@ -200,6 +201,13 @@ async def run_agent_loop(anomaly: AnomalyEvent) -> None:
             )
             return
 
+        signature = anomaly_signature(anomaly.reason, anomaly.service_name)
+        if await store.is_anomaly_suppressed(
+            anomaly.server_id, signature, anomaly.service_name
+        ):
+            logger.info("Agent skipped — anomaly suppressed: %s", signature[:80])
+            return
+
         incident_id = str(uuid.uuid4())
         title = f"Anomaly on {anomaly.server_id}"
         if service_name:
@@ -253,6 +261,9 @@ async def run_agent_loop(anomaly: AnomalyEvent) -> None:
         svc_meta = service_compliance_meta(
             anomaly.server_id, anomaly.service_name
         )
+        fatigue_row = await store.get_alert_fatigue(
+            anomaly.server_id, anomaly.service_name or ""
+        )
         user_payload = {
             "anomaly": {
                 "server_id": anomaly.server_id,
@@ -267,6 +278,9 @@ async def run_agent_loop(anomaly: AnomalyEvent) -> None:
             "sensitive_services": sensitive_services,
             "compliance_profiles": compliance_profiles,
             "compliance_policy_hints": svc_meta.get("policy_hints", []),
+            "alert_fatigue_score": (
+                fatigue_row.get("fatigue_score") if fatigue_row else 0.0
+            ),
             "recent_snapshots": snapshots,
         }
         proposal = await _call_claude(json.dumps(user_payload, default=str))

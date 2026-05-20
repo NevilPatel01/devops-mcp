@@ -1,6 +1,7 @@
 """Setup status API tests."""
 
 from pathlib import Path
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -14,7 +15,7 @@ async def test_setup_status_endpoint() -> None:
         response = await client.get("/api/setup/status")
     assert response.status_code == 200
     data = response.json()
-    assert data["phase"] == 6
+    assert data["phase"] == 8
     assert isinstance(data["servers_configured"], bool)
     assert isinstance(data["repos_configured"], bool)
     assert isinstance(data["repos_count"], int)

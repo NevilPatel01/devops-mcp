@@ -6,13 +6,15 @@ function httpErrorMessage(res, text) {
     : `HTTP ${res.status}: ${text.slice(0, 120)}`;
 }
 
-export default function IncidentDetail({ incident, onClose }) {
+export default function IncidentDetail({ incident, onClose, onFalsePositiveMarked }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [draftPmLoading, setDraftPmLoading] = useState(false);
   const [falsePositiveLoading, setFalsePositiveLoading] = useState(false);
   const [compliance, setCompliance] = useState(null);
+  const [fpReason, setFpReason] = useState("");
+  const [suppressSimilar, setSuppressSimilar] = useState(true);
 
   const loadDetail = useCallback(async () => {
     if (!incident?.id) return;
@@ -81,7 +83,14 @@ export default function IncidentDetail({ incident, onClose }) {
     setFalsePositiveLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/incidents/${incident.id}/false-positive`, { method: "POST" });
+      const res = await fetch(`/api/incidents/${incident.id}/false-positive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason: fpReason.trim() || undefined,
+          suppress_similar_hours: suppressSimilar ? 24 : 0,
+        }),
+      });
       if (!res.ok) {
         const text = await res.text();
         setError(httpErrorMessage(res, text));
@@ -89,6 +98,7 @@ export default function IncidentDetail({ incident, onClose }) {
       }
       const data = await res.json();
       if (data.success) {
+        onFalsePositiveMarked?.(data);
         onClose?.();
       } else {
         setError(data.error || "Failed to mark false positive");
@@ -188,14 +198,35 @@ export default function IncidentDetail({ incident, onClose }) {
                 <p className="mt-2 text-xs text-slate-600">No postmortem yet.</p>
               )}
             </section>
-            <button
-              type="button"
-              onClick={markFalsePositive}
-              disabled={falsePositiveLoading}
-              className="mt-4 rounded border border-slate-600 px-3 py-1.5 text-xs text-slate-400 disabled:opacity-50"
-            >
-              {falsePositiveLoading ? "Marking…" : "Mark false positive"}
-            </button>
+            <section className="mt-4 rounded-lg border border-slate-700 p-3">
+              <h3 className="text-sm font-medium text-slate-400">False positive</h3>
+              <label className="mt-2 block text-xs text-slate-500">
+                Reason (optional)
+                <input
+                  type="text"
+                  value={fpReason}
+                  onChange={(e) => setFpReason(e.target.value)}
+                  className="mt-1 w-full rounded border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+                  placeholder="e.g. expected deploy spike"
+                />
+              </label>
+              <label className="mt-2 flex items-center gap-2 text-xs text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={suppressSimilar}
+                  onChange={(e) => setSuppressSimilar(e.target.checked)}
+                />
+                Suppress similar alerts for 24h
+              </label>
+              <button
+                type="button"
+                onClick={markFalsePositive}
+                disabled={falsePositiveLoading}
+                className="mt-3 rounded border border-slate-600 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50"
+              >
+                {falsePositiveLoading ? "Marking…" : "Mark false positive"}
+              </button>
+            </section>
           </>
         )}
       </div>

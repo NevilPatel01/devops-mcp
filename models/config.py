@@ -58,9 +58,21 @@ class AutomationConfig(BaseModel):
     correlation_window_minutes: int = 30
 
 
+class AnomalyConfig(BaseModel):
+    baseline_margin: float = 1.15
+    use_baseline_detection: bool = True
+
+
+class FalsePositiveConfig(BaseModel):
+    default_suppression_hours: int = 24
+    fatigue_decay_days: int = 30
+
+
 class RulesFile(BaseModel):
     automation: AutomationConfig = Field(default_factory=AutomationConfig)
     risk_overrides: list[RiskOverride] = Field(default_factory=list)
+    anomaly: AnomalyConfig = Field(default_factory=AnomalyConfig)
+    false_positive: FalsePositiveConfig = Field(default_factory=FalsePositiveConfig)
 
 
 class RepoConfig(BaseModel):
