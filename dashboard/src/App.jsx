@@ -2,10 +2,12 @@ import { useState } from "react";
 import Dashboard from "./pages/Dashboard.jsx";
 import Incidents from "./pages/Incidents.jsx";
 import Terraform from "./pages/Terraform.jsx";
+import Runbooks from "./pages/Runbooks.jsx";
 
 const views = [
   { id: "dashboard", label: "Overview" },
   { id: "incidents", label: "Incidents" },
+  { id: "runbooks", label: "Runbooks" },
   { id: "terraform", label: "Terraform" },
 ];
 
@@ -35,6 +37,7 @@ export default function App() {
       {view === "dashboard" && <Dashboard />}
       {view === "incidents" && <Incidents />}
       {view === "terraform" && <Terraform />}
+      {view === "runbooks" && <Runbooks />}
     </div>
   );
 }

@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     resolved_at TIMESTAMP,
     postmortem_draft TEXT,
     is_sensitive INTEGER DEFAULT 0,
-    compliance_profile TEXT
+    compliance_profile TEXT,
+    incident_type TEXT
 );
 
 CREATE TABLE IF NOT EXISTS compliance_audit_log (
@@ -90,10 +91,16 @@ CREATE TABLE IF NOT EXISTS feedback_rules (
 
 CREATE TABLE IF NOT EXISTS runbooks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    runbook_id TEXT,
     incident_type TEXT NOT NULL,
     service_name TEXT,
     steps JSON NOT NULL,
     auto_executable BOOLEAN DEFAULT FALSE,
+    status TEXT DEFAULT 'draft',
+    source_incident_id TEXT,
+    approved_at TIMESTAMP,
+    approved_by TEXT,
+    incident_signature TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

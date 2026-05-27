@@ -10,3 +10,8 @@ risk_overrides:
     risk_tier: medium
   - action_type: run_ssh_command
     risk_tier: high
+
+runbooks:
+  auto_generate_on_resolve: true
+  allowed_auto_action_types:
+    - restart_container

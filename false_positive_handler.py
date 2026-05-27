@@ -8,7 +8,7 @@ from typing import Any
 
 from anomaly_detection import anomaly_signature
 from db import store
-from models.config import load_app_config
+from models.config import FalsePositiveConfig, load_rules_config
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,10 @@ async def process_false_positive(
     if not incident:
         return {"success": False, "error": "Incident not found"}
 
-    cfg = load_app_config()
-    fp_cfg = cfg.rules.false_positive
+    try:
+        fp_cfg = load_rules_config().false_positive
+    except (FileNotFoundError, OSError):
+        fp_cfg = FalsePositiveConfig()
     hours = (
         suppress_similar_hours
         if suppress_similar_hours is not None

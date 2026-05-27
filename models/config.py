@@ -68,11 +68,19 @@ class FalsePositiveConfig(BaseModel):
     fatigue_decay_days: int = 30
 
 
+class RunbooksConfig(BaseModel):
+    auto_generate_on_resolve: bool = True
+    allowed_auto_action_types: list[str] = Field(
+        default_factory=lambda: ["restart_container"]
+    )
+
+
 class RulesFile(BaseModel):
     automation: AutomationConfig = Field(default_factory=AutomationConfig)
     risk_overrides: list[RiskOverride] = Field(default_factory=list)
     anomaly: AnomalyConfig = Field(default_factory=AnomalyConfig)
     false_positive: FalsePositiveConfig = Field(default_factory=FalsePositiveConfig)
+    runbooks: RunbooksConfig = Field(default_factory=RunbooksConfig)
 
 
 class RepoConfig(BaseModel):

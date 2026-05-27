@@ -12,3 +12,8 @@ anomaly:
 false_positive:
   default_suppression_hours: 24
   fatigue_decay_days: 30
+
+runbooks:
+  auto_generate_on_resolve: true
+  allowed_auto_action_types:
+    - restart_container

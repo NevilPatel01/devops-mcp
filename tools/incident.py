@@ -13,6 +13,7 @@ from anthropic import AsyncAnthropic
 from compliance import incident_compliance_fields
 from db import store
 from models.config import load_app_config
+from runbook_engine import draft_runbook_from_incident
 from tools import cicd
 
 logger = logging.getLogger(__name__)
@@ -314,7 +315,9 @@ async def get_oncall_handoff() -> dict[str, Any]:
 
 async def get_runbook(service_name: str, incident_type: str) -> dict[str, Any]:
     try:
-        row = await store.get_runbook(service_name, incident_type)
+        row = await store.get_runbook(
+            service_name, incident_type, status=None
+        )
         if not row:
             return {
                 "success": True,
@@ -327,9 +330,62 @@ async def get_runbook(service_name: str, incident_type: str) -> dict[str, Any]:
             "success": True,
             "error": None,
             "found": True,
+            "runbook_id": row.get("runbook_id"),
+            "status": row.get("status") or "draft",
             "steps": row.get("steps") or [],
             "auto_executable": bool(row.get("auto_executable")),
+            "incident_type": row.get("incident_type"),
+            "service_name": row.get("service_name"),
         }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def list_runbooks(
+    service_name: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    try:
+        rows = await store.list_runbooks(
+            service_name=service_name or None,
+            status=status or None,
+        )
+        return {"success": True, "error": None, "runbooks": rows}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def propose_runbook_from_incident(incident_id: str) -> dict[str, Any]:
+    try:
+        return await draft_runbook_from_incident(incident_id)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def approve_runbook(
+    runbook_id: str,
+    auto_executable: bool = False,
+    approved_by: str = "mcp",
+) -> dict[str, Any]:
+    try:
+        row = await store.approve_runbook(
+            runbook_id,
+            auto_executable=auto_executable,
+            approved_by=approved_by,
+        )
+        if not row:
+            return {"success": False, "error": "Runbook not found"}
+        return {"success": True, "error": None, "runbook": row}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def archive_runbook(runbook_id: str) -> dict[str, Any]:
+    try:
+        row = await store.archive_runbook(runbook_id)
+        if not row:
+            return {"success": False, "error": "Runbook not found"}
+        return {"success": True, "error": None, "runbook": row}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 

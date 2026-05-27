@@ -15,6 +15,8 @@ export default function IncidentDetail({ incident, onClose, onFalsePositiveMarke
   const [compliance, setCompliance] = useState(null);
   const [fpReason, setFpReason] = useState("");
   const [suppressSimilar, setSuppressSimilar] = useState(true);
+  const [runbookLoading, setRunbookLoading] = useState(false);
+  const [runbookMsg, setRunbookMsg] = useState(null);
 
   const loadDetail = useCallback(async () => {
     if (!incident?.id) return;
@@ -110,6 +112,27 @@ export default function IncidentDetail({ incident, onClose, onFalsePositiveMarke
     }
   };
 
+  const generateRunbook = async () => {
+    setRunbookLoading(true);
+    setRunbookMsg(null);
+    setError(null);
+    try {
+      const res = await fetch(`/api/incidents/${incident.id}/generate-runbook`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.success) {
+        setRunbookMsg(`Draft runbook ${data.runbook?.runbook_id || "created"}`);
+      } else {
+        setError(data.error || "Failed to generate runbook");
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunbookLoading(false);
+    }
+  };
+
   const overlayClass =
     "fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4";
   const panelClass =
@@ -175,6 +198,21 @@ export default function IncidentDetail({ incident, onClose, onFalsePositiveMarke
                       </li>
                     ))}
                   </ul>
+                )}
+              </section>
+            )}
+            {(incident.status === "resolved" || detail?.incident?.status === "resolved") && (
+              <section className="mt-4 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={generateRunbook}
+                  disabled={runbookLoading}
+                  className="rounded-lg border border-cyan-800/60 bg-cyan-950/30 px-3 py-1.5 text-xs text-cyan-300 hover:bg-cyan-900/40 disabled:opacity-50"
+                >
+                  {runbookLoading ? "Generating…" : "Generate runbook"}
+                </button>
+                {runbookMsg && (
+                  <span className="text-xs text-emerald-400">{runbookMsg}</span>
                 )}
               </section>
             )}

@@ -23,6 +23,7 @@ from db import store
 from executor import execute_and_finalize
 from models.config import load_app_config
 from models.incident import AnomalyEvent, ProposedAction
+from runbook_engine import classify_incident_type, try_runbook_action
 from tools import incident as incident_tools
 from ws_hub import ws_broadcast
 
@@ -237,6 +238,43 @@ async def run_agent_loop(anomaly: AnomalyEvent) -> None:
             service_name,
             minutes_back=cfg.rules.automation.correlation_window_minutes,
         )
+        incident_type = classify_incident_type(
+            anomaly.reason,
+            correlation if correlation.get("success") else None,
+        )
+        await store.update_incident_type(incident_id, incident_type)
+
+        async def _broadcast_pending(action_row: dict[str, Any]) -> None:
+            await ws_broadcast(
+                {"type": "action_pending", "action": _serialize_action(action_row)}
+            )
+
+        rb_outcome = await try_runbook_action(
+            incident_id=incident_id,
+            server_id=anomaly.server_id,
+            service_name=service_name,
+            incident_type=incident_type,
+            protected=protected,
+            auto_tier=cfg.rules.automation.auto_execute_risk_tier.lower(),
+            stale_after_hours=cfg.rules.automation.stale_after_hours,
+            apply_risk_override=_apply_risk_overrides,
+            maybe_auto_execute_fn=_maybe_auto_execute,
+            broadcast_pending_fn=_broadcast_pending,
+        )
+        if rb_outcome in ("executed", "pending"):
+            if rb_outcome == "pending":
+                delay = cfg.rules.automation.approval_timeout_seconds
+                pending_row = await store.get_pending_action_for_server(anomaly.server_id)
+                if pending_row:
+                    await _schedule_reminder(pending_row["id"], delay)
+            logger.info(
+                "Runbook path for %s (%s): %s",
+                service_name,
+                incident_type,
+                rb_outcome,
+            )
+            return
+
         rules = await store.list_feedback_rules(
             server_id=anomaly.server_id,
             service_name=anomaly.service_name,

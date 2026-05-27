@@ -270,6 +270,9 @@ async def execute_and_finalize(action: ProposedAction) -> dict[str, Any]:
         postmortem_md = None
         if action.incident_id:
             await store.update_incident_status(action.incident_id, "resolved")
+            from runbook_engine import maybe_create_draft_runbook
+
+            await maybe_create_draft_runbook(action.incident_id, action)
             pm = await incident_tools.draft_postmortem(action.incident_id)
             if pm.get("success"):
                 postmortem_md = pm.get("postmortem_markdown")

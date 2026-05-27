@@ -196,6 +196,88 @@ async def api_draft_postmortem(incident_id: str) -> dict:
     return await incident_tools.draft_postmortem(incident_id)
 
 
+class RunbookApproveBody(BaseModel):
+    auto_executable: bool = False
+    approved_by: str = "dashboard"
+
+
+class RunbookStepsBody(BaseModel):
+    steps: list[dict]
+
+
+@app.get("/api/runbooks")
+async def api_list_runbooks(
+    service_name: str | None = None,
+    status: str | None = None,
+) -> dict:
+    from tools import incident as incident_tools
+
+    return await incident_tools.list_runbooks(service_name=service_name, status=status)
+
+
+@app.get("/api/runbooks/{runbook_id}")
+async def api_get_runbook(runbook_id: str) -> JSONResponse:
+    row = await store.get_runbook_by_id(runbook_id)
+    if not row:
+        return JSONResponse({"success": False, "error": "Not found"}, status_code=404)
+    return JSONResponse({"success": True, "runbook": row})
+
+
+@app.post("/api/runbooks/{runbook_id}/approve")
+async def api_approve_runbook(
+    runbook_id: str,
+    body: RunbookApproveBody = Body(default_factory=RunbookApproveBody),
+) -> dict:
+    from tools import incident as incident_tools
+    from ws_hub import ws_broadcast
+
+    result = await incident_tools.approve_runbook(
+        runbook_id,
+        auto_executable=body.auto_executable,
+        approved_by=body.approved_by,
+    )
+    if result.get("success"):
+        await ws_broadcast(
+            {
+                "type": "runbook_approved",
+                "runbook_id": runbook_id,
+                "runbook": result.get("runbook"),
+            }
+        )
+    return result
+
+
+@app.post("/api/incidents/{incident_id}/generate-runbook")
+async def api_generate_runbook(incident_id: str) -> dict:
+    from tools import incident as incident_tools
+    from ws_hub import ws_broadcast
+
+    result = await incident_tools.propose_runbook_from_incident(incident_id)
+    if result.get("success"):
+        await ws_broadcast(
+            {
+                "type": "runbook_draft_created",
+                "incident_id": incident_id,
+                "runbook": result.get("runbook"),
+            }
+        )
+    return result
+
+
+@app.put("/api/runbooks/{runbook_id}")
+async def api_update_runbook(
+    runbook_id: str,
+    body: RunbookStepsBody,
+) -> JSONResponse:
+    row = await store.update_runbook_steps(runbook_id, body.steps)
+    if not row:
+        return JSONResponse(
+            {"success": False, "error": "Not found or not a draft"},
+            status_code=404,
+        )
+    return JSONResponse({"success": True, "runbook": row})
+
+
 @app.get("/api/handoff")
 async def api_handoff() -> dict:
     from tools import incident as incident_tools

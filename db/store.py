@@ -34,6 +34,29 @@ async def _migrate_schema(conn: aiosqlite.Connection) -> None:
     incident_cols = {row[1] for row in await cursor.fetchall()}
     if "compliance_profile" not in incident_cols:
         await conn.execute("ALTER TABLE incidents ADD COLUMN compliance_profile TEXT")
+    cursor = await conn.execute("PRAGMA table_info(incidents)")
+    incident_cols = {row[1] for row in await cursor.fetchall()}
+    if "incident_type" not in incident_cols:
+        await conn.execute("ALTER TABLE incidents ADD COLUMN incident_type TEXT")
+
+    cursor = await conn.execute("PRAGMA table_info(runbooks)")
+    runbook_cols = {row[1] for row in await cursor.fetchall()}
+    for col, typedef in (
+        ("runbook_id", "TEXT"),
+        ("status", "TEXT DEFAULT 'draft'"),
+        ("source_incident_id", "TEXT"),
+        ("approved_at", "TIMESTAMP"),
+        ("approved_by", "TEXT"),
+        ("incident_signature", "TEXT"),
+    ):
+        if col not in runbook_cols:
+            await conn.execute(f"ALTER TABLE runbooks ADD COLUMN {col} {typedef}")
+    await conn.execute(
+        "UPDATE runbooks SET status = 'draft' WHERE status IS NULL OR status = ''"
+    )
+    await conn.execute(
+        "UPDATE runbooks SET runbook_id = CAST(id AS TEXT) WHERE runbook_id IS NULL"
+    )
 
     cursor = await conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='compliance_audit_log'"
@@ -518,6 +541,15 @@ async def update_incident_status(
     await conn.commit()
 
 
+async def update_incident_type(incident_id: str, incident_type: str) -> None:
+    conn = await _conn()
+    await conn.execute(
+        "UPDATE incidents SET incident_type = ? WHERE id = ?",
+        (incident_type, incident_id),
+    )
+    await conn.commit()
+
+
 async def find_similar_incidents(
     server_id: str,
     service_name: str | None,
@@ -929,26 +961,157 @@ async def list_alert_fatigue() -> list[dict[str, Any]]:
     return [dict(r) for r in await cursor.fetchall()]
 
 
-async def get_runbook(
-    service_name: str, incident_type: str
-) -> dict[str, Any] | None:
-    conn = await _conn()
-    cursor = await conn.execute(
-        """
-        SELECT * FROM runbooks
-        WHERE service_name = ? AND incident_type = ?
-        ORDER BY updated_at DESC LIMIT 1
-        """,
-        (service_name, incident_type),
-    )
-    row = await cursor.fetchone()
-    if not row:
-        return None
+def _runbook_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
     data = dict(row)
     steps = data.get("steps")
     if isinstance(steps, str):
         data["steps"] = json.loads(steps or "[]")
+    if not data.get("runbook_id") and data.get("id") is not None:
+        data["runbook_id"] = str(data["id"])
     return data
+
+
+async def get_runbook(
+    service_name: str,
+    incident_type: str,
+    *,
+    status: str | None = "approved",
+) -> dict[str, Any] | None:
+    conn = await _conn()
+    query = """
+        SELECT * FROM runbooks
+        WHERE incident_type = ?
+          AND COALESCE(service_name, '') = COALESCE(?, '')
+    """
+    params: list[Any] = [incident_type, service_name or None]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY updated_at DESC LIMIT 1"
+    cursor = await conn.execute(query, params)
+    row = await cursor.fetchone()
+    return _runbook_row_to_dict(row) if row else None
+
+
+async def get_runbook_by_id(runbook_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        """
+        SELECT * FROM runbooks
+        WHERE runbook_id = ? OR CAST(id AS TEXT) = ?
+        LIMIT 1
+        """,
+        (runbook_id, runbook_id),
+    )
+    row = await cursor.fetchone()
+    return _runbook_row_to_dict(row) if row else None
+
+
+async def list_runbooks(
+    *,
+    service_name: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    conn = await _conn()
+    query = "SELECT * FROM runbooks WHERE 1=1"
+    params: list[Any] = []
+    if service_name:
+        query += " AND service_name = ?"
+        params.append(service_name)
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY updated_at DESC"
+    cursor = await conn.execute(query, params)
+    return [_runbook_row_to_dict(r) for r in await cursor.fetchall()]
+
+
+async def insert_runbook_draft(
+    *,
+    incident_type: str,
+    service_name: str | None,
+    steps: list[dict[str, Any]],
+    source_incident_id: str | None = None,
+    incident_signature: str | None = None,
+) -> dict[str, Any]:
+    import uuid as _uuid
+
+    conn = await _conn()
+    runbook_id = str(_uuid.uuid4())
+    await conn.execute(
+        """
+        INSERT INTO runbooks (
+            runbook_id, incident_type, service_name, steps,
+            auto_executable, status, source_incident_id, incident_signature
+        )
+        VALUES (?, ?, ?, ?, 0, 'draft', ?, ?)
+        """,
+        (
+            runbook_id,
+            incident_type,
+            service_name,
+            json.dumps(steps),
+            source_incident_id,
+            incident_signature,
+        ),
+    )
+    await conn.commit()
+    row = await get_runbook_by_id(runbook_id)
+    assert row is not None
+    return row
+
+
+async def approve_runbook(
+    runbook_id: str,
+    *,
+    auto_executable: bool,
+    approved_by: str = "dashboard",
+) -> dict[str, Any] | None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        UPDATE runbooks
+        SET status = 'approved',
+            auto_executable = ?,
+            approved_at = CURRENT_TIMESTAMP,
+            approved_by = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE runbook_id = ? OR CAST(id AS TEXT) = ?
+        """,
+        (1 if auto_executable else 0, approved_by, runbook_id, runbook_id),
+    )
+    await conn.commit()
+    return await get_runbook_by_id(runbook_id)
+
+
+async def archive_runbook(runbook_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        UPDATE runbooks
+        SET status = 'archived', updated_at = CURRENT_TIMESTAMP
+        WHERE runbook_id = ? OR CAST(id AS TEXT) = ?
+        """,
+        (runbook_id, runbook_id),
+    )
+    await conn.commit()
+    return await get_runbook_by_id(runbook_id)
+
+
+async def update_runbook_steps(
+    runbook_id: str, steps: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        UPDATE runbooks
+        SET steps = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE (runbook_id = ? OR CAST(id AS TEXT) = ?) AND status = 'draft'
+        """,
+        (json.dumps(steps), runbook_id, runbook_id),
+    )
+    await conn.commit()
+    return await get_runbook_by_id(runbook_id)
 
 
 async def list_recent_actions(hours: int = 8, limit: int = 50) -> list[dict[str, Any]]:

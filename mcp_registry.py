@@ -50,6 +50,10 @@ _INCIDENT_TOOLS = [
     ("draft_postmortem", incident.draft_postmortem, ["incident_id"]),
     ("get_oncall_handoff", incident.get_oncall_handoff, []),
     ("get_runbook", incident.get_runbook, ["service_name", "incident_type"]),
+    ("list_runbooks", incident.list_runbooks, []),
+    ("propose_runbook_from_incident", incident.propose_runbook_from_incident, ["incident_id"]),
+    ("approve_runbook", incident.approve_runbook, ["runbook_id"]),
+    ("archive_runbook", incident.archive_runbook, ["runbook_id"]),
     ("get_compliance_context", compliance.get_compliance_context, None),
     ("list_compliance_audit", compliance.list_compliance_audit, []),
     ("mark_false_positive", false_positive.mark_false_positive, ["incident_id"]),
@@ -203,6 +207,22 @@ def _tool_schema(name: str, required: list[str] | None) -> types.Tool:
             "incident_type": {"type": "string"},
         }
         req = ["service_name", "incident_type"]
+    elif name == "list_runbooks":
+        props = {"service_name": {"type": "string"}, "status": {"type": "string"}}
+        req = []
+    elif name == "propose_runbook_from_incident":
+        props = {"incident_id": {"type": "string"}}
+        req = ["incident_id"]
+    elif name == "approve_runbook":
+        props = {
+            "runbook_id": {"type": "string"},
+            "auto_executable": {"type": "boolean"},
+            "approved_by": {"type": "string"},
+        }
+        req = ["runbook_id"]
+    elif name == "archive_runbook":
+        props = {"runbook_id": {"type": "string"}}
+        req = ["runbook_id"]
     elif name == "get_compliance_context":
         props = {"server_id": {"type": "string"}, "service_name": {"type": "string"}}
         req = ["server_id", "service_name"]
