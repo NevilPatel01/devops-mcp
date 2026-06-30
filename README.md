@@ -28,83 +28,339 @@ Most monitoring tools alert on thresholds. This project closes the loop: Claude 
 
 ---
 
-## Architecture
+## High-level architecture
+
+Single process on **`127.0.0.1:8080`** — `python server.py` runs FastAPI, WebSocket, MCP (SSE), the 30s poller, and serves the React build. No agent on VPS; all remote access is SSH + GitHub API.
+
+### Deployment topology
+
+```mermaid
+flowchart TB
+  subgraph Clients["Operator channels"]
+    Browser["React dashboard<br/>HTTP + WebSocket /ws"]
+    ClaudeDesktop["Claude Desktop<br/>MCP SSE /mcp"]
+  end
+
+  subgraph Host["Local host · python server.py"]
+    direction TB
+    Entry["server.py<br/>FastAPI · static dashboard/dist"]
+
+    subgraph Core["Core runtime"]
+      direction LR
+      Poller["poller.py<br/>30s health loop"]
+      Agent["agent.py<br/>Claude one-shot plan"]
+      Executor["executor.py<br/>risk-gated SSH"]
+    end
+
+    Hub["ws_hub.py<br/>WebSocket broadcast"]
+    Store[("db/store.py<br/>SQLite")]
+
+    Entry --> Hub
+    Entry --> Poller
+    Entry --> Agent
+    Entry --> Executor
+    Poller --> Store
+    Agent --> Store
+    Executor --> Store
+    Hub --> Browser
+  end
+
+  subgraph Remote["External systems"]
+    VPS["VPS fleet (1–3)<br/>Ubuntu 22.04 · Docker Compose"]
+    GitHub["GitHub Actions<br/>workflows & logs"]
+    Anthropic["Anthropic API<br/>claude-sonnet-4-5"]
+  end
+
+  Browser <-->|"live state · approvals"| Hub
+  ClaudeDesktop <-->|"fallback approve/reject"| Entry
+  Poller -->|"SSH read"| VPS
+  Executor -->|"SSH write"| VPS
+  Agent -->|"correlate CI/CD"| GitHub
+  Agent -->|"plan JSON"| Anthropic
+```
 
 ### System context
 
 ```mermaid
-flowchart TB
+flowchart LR
   subgraph Operator
-    Browser["Operator browser<br/>React dashboard :8080"]
-    ClaudeDesktop["Claude Desktop<br/>(MCP fallback)"]
+    UI["Browser :8080"]
+    CD["Claude Desktop"]
   end
 
-  subgraph devops_agent["devops-agent (single Python process)"]
-    Server["server.py<br/>FastAPI + MCP + WebSocket"]
-    Poller["poller.py<br/>30s health loop"]
-    Agent["agent.py<br/>Claude reasoning loop"]
-    Executor["executor.py<br/>Risk-gated SSH execution"]
-    Store["db/store.py<br/>SQLite"]
-    Server --> Poller
-    Server --> Agent
-    Server --> Executor
-    Poller --> Store
-    Agent --> Store
-    Executor --> Store
+  subgraph AgentRuntime["devops-agent"]
+    S["server.py"]
+    P["poller.py"]
+    A["agent.py"]
+    E["executor.py"]
+    DB[("SQLite")]
   end
 
-  subgraph Tools["MCP tools/"]
-    Infra["infrastructure.py<br/>read-only SSH"]
-    ExecTools["executor.py<br/>write SSH / compose"]
-    CICD["cicd.py<br/>GitHub API"]
-    Incident["incident.py<br/>incidents & memory"]
+  subgraph MCPTools["tools/"]
+    Infra["infrastructure<br/>read SSH"]
+    Inc["incident<br/>correlate · memory"]
+    CI["cicd<br/>GitHub API"]
+    ExT["executor<br/>write SSH"]
   end
 
-  Browser <-->|"WebSocket /ws"| Server
-  ClaudeDesktop <-->|"MCP stdio"| Server
-  Server --> Tools
-  Poller --> Infra
-  Agent --> Incident
-  Agent --> CICD
-  Executor --> ExecTools
-
-  subgraph VPS["VPS fleet (1–3)"]
-    S1["Ubuntu 22.04<br/>Docker + compose"]
+  subgraph Infra["Managed infrastructure"]
+    VPS["VPS × 1–3"]
+    GHA["GitHub Actions"]
   end
 
-  subgraph GitHub["GitHub"]
-    GHA["Actions workflows"]
-  end
+  LLM["Anthropic API"]
 
-  Tools -->|"SSH (paramiko)"| VPS
-  CICD -->|"REST API"| GHA
+  UI <-->|WebSocket| S
+  CD <-->|MCP SSE| S
+  S --> P & A & E
+  P & A & E --> DB
+  S --> MCPTools
+  P --> Infra
+  A --> Inc & CI
+  E --> ExT
+  Infra & ExT -->|paramiko| VPS
+  CI --> GHA
+  A --> LLM
 ```
 
-### Component responsibilities
+---
+
+## System design
+
+### Layered architecture
+
+```mermaid
+flowchart TB
+  subgraph Presentation["Presentation"]
+    Dash["dashboard/<br/>React · Vite · Tailwind"]
+    WSClient["ws.js<br/>WebSocket singleton"]
+    Dash --> WSClient
+  end
+
+  subgraph Application["Application · server.py"]
+    API["REST /api/health"]
+    WS["WebSocket /ws"]
+    MCP["MCP SSE /mcp"]
+    Static["StaticFiles dashboard/dist"]
+  end
+
+  subgraph Domain["Domain services"]
+    Poll["poller.py<br/>observe · detect"]
+    Agt["agent.py<br/>analyse · plan · gate"]
+    Exec["executor.py<br/>execute · verify · rollback"]
+  end
+
+  subgraph ToolsLayer["MCP tool layer · tools/"]
+    direction LR
+    T1["infrastructure.py"]
+    T2["incident.py"]
+    T3["cicd.py"]
+    T4["executor.py"]
+  end
+
+  subgraph Persistence["Persistence · db/store.py only"]
+    SQL[("SQLite<br/>incidents · actions · rules · snapshots")]
+  end
+
+  subgraph External["External"]
+    SSH["VPS via SSH"]
+    GH["GitHub REST"]
+    AI["Anthropic HTTPS"]
+  end
+
+  WSClient <-->|events| WS
+  WS --> Domain
+  MCP --> ToolsLayer
+  Poll --> T1 --> SSH
+  Agt --> T2 & T3
+  Agt --> AI
+  T3 --> GH
+  Exec --> T4 --> SSH
+  Domain --> SQL
+  ToolsLayer --> SQL
+```
+
+### Design constraints
+
+```mermaid
+mindmap
+  root((Design))
+    Runtime
+      Single process
+      python server.py
+      Bind 127.0.0.1:8080
+    Safety
+      Human-in-the-loop
+      Risk enforced in executor
+      Max 1 pending action per server
+      protected_services block writes
+    Remote ops
+      SSH only paramiko
+      No daemon on VPS
+      10s timeout pooled connections
+    Data
+      SQLite via store.py only
+      UTC in DB local in UI
+      Snapshots pruned after 7d
+    MCP contract
+      Return success and error
+      Never raise to caller
+      Claude Desktop via SSE
+    Learning
+      Rejections to feedback_rules
+      Claude respects on replan
+```
+
+### Component map
 
 ```mermaid
 flowchart LR
-  subgraph Data["Persistence"]
-    SQL[(SQLite)]
-    Snapshots[snapshots]
-    Incidents[incidents]
-    Actions[proposed_actions]
-    Rules[feedback_rules]
-    SQL --- Snapshots
-    SQL --- Incidents
-    SQL --- Actions
-    SQL --- Rules
+  subgraph Entry
+    server["server.py<br/>lifespan · routes · mount static"]
   end
 
-  Poller["poller.py"] -->|"write metrics"| Snapshots
-  Poller -->|"anomaly"| Agent["agent.py"]
-  Agent -->|"pending action"| Actions
-  Agent -->|"WS: action_pending"| UI["Dashboard"]
-  UI -->|"approve / reject"| Server["server.py"]
-  Claude["Claude Desktop MCP"] -->|"approve / reject"| Server
-  Server --> Executor["executor.py"]
-  Executor -->|"action_logs + WS stream"| UI
-  Executor -->|"SSH"| VPS["VPS"]
+  subgraph Observe
+    poller["poller.py<br/>metrics · baselines · anomalies"]
+    metrics["health_metrics.py"]
+    ssh["ssh_client.py<br/>pooled paramiko"]
+    poller --> metrics & ssh
+  end
+
+  subgraph Reason
+    agent["agent.py<br/>context gather · Claude JSON"]
+  end
+
+  subgraph Act
+    executor["executor.py<br/>risk check · snapshot · health"]
+  end
+
+  subgraph Realtime
+    hub["ws_hub.py<br/>broadcast to dashboards"]
+  end
+
+  subgraph UI
+    react["dashboard/src<br/>ServerGrid · ApprovalCard · IncidentFeed"]
+  end
+
+  subgraph Data
+    store["db/store.py"]
+    schema["db/schema.sql"]
+    store --> schema
+  end
+
+  server --> poller & agent & executor & hub
+  hub <--> react
+  poller & agent & executor --> store
+```
+
+### Data model
+
+```mermaid
+erDiagram
+  servers ||--o{ snapshots : captures
+  servers ||--o| baselines : tracks
+  servers ||--o{ incidents : reports
+  incidents ||--o{ proposed_actions : triggers
+  proposed_actions ||--o{ action_logs : streams
+
+  servers {
+    text id PK
+    text label
+    text host
+    timestamp last_seen_at
+    text status
+  }
+
+  snapshots {
+    int id PK
+    text server_id FK
+    timestamp captured_at
+    real cpu_percent
+    real memory_percent
+    json container_statuses
+  }
+
+  baselines {
+    text server_id PK
+    real cpu_p95
+    real memory_p95
+  }
+
+  incidents {
+    text id PK
+    text server_id FK
+    text title
+    text status
+    text severity
+    timestamp created_at
+  }
+
+  proposed_actions {
+    text id PK
+    text incident_id FK
+    text action_type
+    text risk_tier
+    text status
+  }
+
+  action_logs {
+    int id PK
+    text action_id FK
+    text line
+    timestamp logged_at
+  }
+
+  feedback_rules {
+    int id PK
+    text rule_text
+    timestamp created_at
+  }
+```
+
+Full schema: [`db/schema.sql`](db/schema.sql).
+
+### End-to-end data flow
+
+```mermaid
+flowchart LR
+  subgraph Ingest
+    VPS["VPS SSH"]
+    Poller["poller.py"]
+    Snap[("snapshots")]
+    Base[("baselines")]
+    VPS --> Poller
+    Poller --> Snap & Base
+  end
+
+  subgraph DetectPlan
+    Anomaly["anomaly event"]
+    Agent["agent.py"]
+    Claude["Anthropic API"]
+    Inc[("incidents")]
+    Act[("proposed_actions")]
+    Poller --> Anomaly --> Agent
+    Agent --> Claude
+    Agent --> Inc & Act
+  end
+
+  subgraph Gate
+    WS["WebSocket"]
+    UI["Dashboard"]
+    MCP["Claude Desktop"]
+    Act --> WS --> UI
+    Act --> MCP
+    UI & MCP -->|"approve / reject"| Agent
+  end
+
+  subgraph Execute
+    Exec["executor.py"]
+    Logs[("action_logs")]
+    VPS2["VPS SSH"]
+    Agent --> Exec
+    Exec --> Logs
+    Exec --> VPS2
+    Exec -->|"health OK"| Inc
+  end
 ```
 
 ### Approval & risk flow
@@ -142,18 +398,83 @@ sequenceDiagram
   end
 ```
 
-### Real-time WebSocket protocol
+### Risk tiers
 
-| Direction | `type` | Purpose |
-|-----------|--------|---------|
-| Server → client | `snapshot_update` | Live server metrics |
-| Server → client | `incident_created` | New incident |
-| Server → client | `action_pending` | Show approval card |
-| Server → client | `action_log_line` | Stream SSH output |
-| Server → client | `action_executed` / `action_rolled_back` | Execution outcome |
-| Server → client | `incident_resolved` | Close incident |
-| Client → server | `approve_action` / `reject_action` | Human gate |
-| Client → server | `request_handoff` | Shift summary (Phase 4) |
+```mermaid
+flowchart TD
+  Action["ProposedAction"] --> Check{"risk_tier?"}
+
+  Check -->|LOW| Low["Restart container · diagnostics"]
+  Check -->|MEDIUM| Med["Compose change · rollback · scale"]
+  Check -->|HIGH| High["Arbitrary SSH command"]
+
+  Low --> Auto{"auto_execute_risk_tier: low?"}
+  Auto -->|yes| Run["executor.py runs"]
+  Auto -->|no| Wait["Dashboard approval"]
+
+  Med --> Approve["Always requires approval"]
+  High --> Confirm["Approval + type CONFIRM"]
+
+  Approve --> Run
+  Confirm --> Run
+  Wait --> Run
+
+  Run --> Protected{"service in protected_services?"}
+  Protected -->|yes| Block["Blocked even if LOW"]
+  Protected -->|no| SSH["SSH execute + health check"]
+```
+
+### WebSocket protocol
+
+```mermaid
+flowchart LR
+  subgraph ServerToClient["Server → client"]
+    S1["snapshot_update<br/>live metrics"]
+    S2["incident_created"]
+    S3["action_pending<br/>approval card"]
+    S4["action_log_line<br/>SSH stream"]
+    S5["action_executed"]
+    S6["action_rolled_back"]
+    S7["incident_resolved"]
+    S8["action_pending_reminder<br/>after 60s"]
+  end
+
+  subgraph ClientToServer["Client → server"]
+    C1["approve_action"]
+    C2["reject_action"]
+    C3["request_handoff<br/>Phase 4"]
+  end
+
+  Hub["ws_hub.py"] --> ServerToClient
+  ClientToServer --> Hub
+```
+
+### External integrations
+
+```mermaid
+flowchart TB
+  subgraph DevOpsAgent["devops-agent"]
+    Poll["poller.py"]
+    Agt["agent.py"]
+    Exe["executor.py"]
+    CICD["tools/cicd.py"]
+    Infra["tools/infrastructure.py"]
+  end
+
+  VPS["VPS fleet<br/>Paramiko SSH · 10s timeout · key auth"]
+  GH["GitHub<br/>PyGithub REST · Actions runs & logs"]
+  AI["Anthropic<br/>HTTPS · one-shot JSON plan"]
+  CD["Claude Desktop<br/>MCP SSE localhost:8080/mcp"]
+  BR["Browser<br/>WebSocket + static HTTP"]
+
+  Poll --> Infra --> VPS
+  Exe --> VPS
+  Agt --> AI
+  CICD --> GH
+  Agt --> CICD
+  CD <-->|approve · reject · reminder| DevOpsAgent
+  BR <-->|live UI| DevOpsAgent
+```
 
 ---
 
