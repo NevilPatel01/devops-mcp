@@ -7,7 +7,7 @@ import re
 
 from health_metrics import parse_docker_ps_json
 from models.config import ServerConfig, ThresholdConfig
-from ssh_client import run_ssh, run_ssh_script
+from ssh_client import run_ssh
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,8 @@ async def test_ssh_connection(
         thresholds=ThresholdConfig(),
     )
     try:
-        code, out, err = await run_ssh(server, "echo ok && docker ps --format '{{.Names}}' | head -5")
+        probe_cmd = "echo ok && docker ps --format '{{.Names}}' | head -5"
+        code, out, err = await run_ssh(server, probe_cmd)
         if code != 0 or "ok" not in out:
             return {
                 "success": False,
@@ -71,7 +72,12 @@ async def discover_compose_files(
     try:
         code, out, err = await run_ssh(server, _COMPOSE_FIND, timeout=15.0)
         paths = [ln.strip() for ln in out.splitlines() if ln.strip()]
-        return {"success": True, "error": None, "compose_files": paths, "stderr": err.strip() or None}
+        return {
+            "success": True,
+            "error": None,
+            "compose_files": paths,
+            "stderr": err.strip() or None,
+        }
     except Exception as exc:
         return {"success": False, "error": str(exc), "compose_files": []}
 

@@ -135,7 +135,7 @@ async def _loop(interval: int) -> None:
             await asyncio.gather(*[_check_one(s) for s in with_url], return_exceptions=True)
         try:
             await asyncio.wait_for(_stop_event.wait(), timeout=interval)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
 

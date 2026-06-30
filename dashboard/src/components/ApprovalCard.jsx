@@ -65,20 +65,20 @@ export default function ApprovalCard({ action, onClear }) {
           )}
         </p>
       )}
-      <p className="mt-2 text-sm">{action.description}</p>
-      <p className="mt-2 text-xs opacity-90">
+      <p className="mt-2 text-sm text-current">{action.description}</p>
+      <p className="mt-2 text-xs text-current/90">
         <span className="font-medium">Rationale:</span> {action.rationale}
       </p>
-      <p className="mt-1 text-xs opacity-75">
+      <p className="mt-1 text-xs text-current/80">
         <span className="font-medium">Rollback:</span> {action.rollback_plan}
       </p>
-      <p className="mt-2 font-mono text-xs opacity-70">
+      <p className="mt-2 font-mono text-xs text-current/75">
         {params.server_id} · {params.container_name || params.service_name || action.action_type}
       </p>
 
       {isHigh && (
         <motionHeaderInner>
-          <label className="w-full text-xs opacity-80">Type CONFIRM to approve HIGH risk</label>
+          <label className="w-full text-xs text-current/80">Type CONFIRM to approve HIGH risk</label>
           <input
             type="text"
             value={confirmText}
@@ -148,7 +148,7 @@ export default function ApprovalCard({ action, onClear }) {
 function motionHeader({ risk }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <h2 className="text-lg font-semibold">Action pending approval</h2>
+      <h2 className="text-lg font-semibold text-current">Action pending approval</h2>
       <span className="rounded-full border border-current px-2 py-0.5 text-xs uppercase">
         {risk}
       </span>

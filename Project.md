@@ -264,18 +264,30 @@ flowchart LR
 ### 3.4 Approval & risk flow
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','actorTextColor':'#0f172a','signalTextColor':'#0f172a','labelTextColor':'#0f172a','loopTextColor':'#0f172a','noteTextColor':'#0f172a','noteBkgColor':'#fef9c3','noteBorderColor':'#ca8a04','activationBorderColor':'#475569','activationBkgColor':'#e2e8f0','sequenceNumberColor':'#0f172a'}}}%%
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','primaryColor':'#e0e7ff','primaryBorderColor':'#6366f1','secondaryColor':'#f8fafc','tertiaryColor':'#ffffff','lineColor':'#475569','textColor':'#0f172a','actorBkg':'#f8fafc','actorBorder':'#64748b','actorTextColor':'#0f172a','actorLineColor':'#475569','signalColor':'#475569','signalTextColor':'#0f172a','labelBoxBkgColor':'#f1f5f9','labelBoxBorderColor':'#64748b','labelTextColor':'#0f172a','loopTextColor':'#0f172a','noteBkgColor':'#fef9c3','noteBorderColor':'#ca8a04','noteTextColor':'#0f172a','activationBorderColor':'#475569','activationBkgColor':'#e2e8f0','sequenceNumberColor':'#0f172a'}}}%%
 sequenceDiagram
   autonumber
-  participant P as poller.py
-  participant A as agent.py
-  participant DB as SQLite
-  participant WS as WebSocket
-  participant UI as Dashboard
-  participant MCP as Claude Desktop
-  participant Ap as approvals.py
-  participant E as executor.py
-  participant VPS as VPS
+
+  box rgb(220,252,231) Ingest
+    participant P as poller.py
+  end
+
+  box rgb(237,233,254) Agent
+    participant A as agent.py
+    participant DB as SQLite
+  end
+
+  box rgb(254,243,199) Approval gate
+    participant WS as WebSocket
+    participant UI as Dashboard
+    participant MCP as Claude Desktop
+    participant Ap as approvals.py
+  end
+
+  box rgb(219,234,254) Execute
+    participant E as executor.py
+    participant VPS as VPS
+  end
 
   P->>A: AnomalyEvent
   A->>DB: create_incident
