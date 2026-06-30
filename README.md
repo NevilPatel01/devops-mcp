@@ -1,30 +1,94 @@
-# DevOps AI Agent
+# DevOps MCP — Multi-site fleet control
 
-An autonomous **DevOps AI agent** that monitors real VPS infrastructure over SSH, reasons about anomalies with Claude, proposes remediations, and executes fixes behind a **human-in-the-loop approval gate**. Built on the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), with a real-time React dashboard and Claude Desktop as a fallback approval channel.
+**DevOps MCP** is a local-first control plane for agencies and indie hackers managing **5–20 client sites** on Docker Compose VPS hosts. One dashboard shows **live uptime**, per-site HTTP latency, container logs, and restart actions across your fleet—no agent installed on servers, only SSH.
 
-> **Status:** Phases 0–8 complete (Terraform, compliance, false-positive learning, **runbook engine**). Phase 9 (demo mode) planned — see `docs/PHASES_5_9_PLAN.md`.  
-> **Spec:** [Project.md](Project.md) (build phases in §11).
+The same runtime still includes the original **AI DevOps agent** (Phases 0–8): SSH poller, Claude planning, risk-gated execution, and MCP tools for investigation. The **product UI** is now **fleet-first**; advanced agent/Terraform/runbook features stay in the codebase but are not the primary nav.
 
-<!-- Record a screen capture (container crash → approval → live output → resolved) and save as docs/assets/demo.gif, then uncomment: -->
-<!-- ![Demo](docs/assets/demo.gif) -->
-
----
-
-## What this is
-
-Most monitoring tools alert on thresholds. This project closes the loop: Claude **correlates** signals (e.g. container crash + recent GitHub Actions deploy), **proposes** a single remediation with risk tier and rollback plan, waits for **your approval** (web UI or Claude Desktop), then **executes** over SSH and **verifies** health—with full audit logs and **learned rules** from past rejections.
+> **Status:** Fleet product v2 shipped (onboarding, sites, live uptime, fleet table UI). Core agent Phases 0–8 complete. **Production deploy** (`devopsmcp.nevil.ca`) still needs HTTPS, auth, and Slack delivery — see [Product status](#product-status) below.  
+> **Original spec:** [Project.md](Project.md) · **Decisions:** [docs/DECISIONS.md](docs/DECISIONS.md)
 
 ---
 
-## How it works (agent loop)
+## Why we pivoted
 
-1. **Observe** — Poller SSHes each VPS every 30s; metrics and container state go to SQLite; baselines updated.
-2. **Detect** — Thresholds and baseline deviation raise an anomaly.
-3. **Analyse** — Agent loads feedback rules, runs `correlate_incident` (snapshots, CI/CD, history).
-4. **Plan** — Claude returns one structured `ProposedAction` (action, rationale, risk, rollback).
-5. **Gate** — Pending action on dashboard; LOW-risk safe fixes auto-execute; after 60s, MCP + reminder if still pending (HIGH requires dashboard `CONFIRM`).
-6. **Execute** — Approved actions run through risk-gated executor with live log streaming.
-7. **Verify** — Post-action health check; auto-rollback on failure; postmortem when resolved.
+This repo started as a **portfolio-grade autonomous DevOps agent** demo: poller → Claude → approval gate → SSH execute, with Terraform UI, compliance typing, runbooks, and Claude Desktop as a first-class approval channel.
+
+That architecture is strong engineering, but it is **not what operators with many small client VPS sites reach for daily**. Feedback and real use pointed to a simpler job:
+
+| Old focus | Problem |
+|-----------|---------|
+| Server-centric grid + incident feed | Hard to see **which client site** is down at a glance |
+| YAML-first onboarding | High friction vs “paste SSH key, add URL” |
+| Terraform / compliance / runbooks in main nav | Impressive for demos, **noise** for 5–20 Compose sites |
+| Claude Desktop as approval path | Wrong default for a **web product** |
+
+**Pivot (2026):** **Site-first fleet product** — connect VPS over SSH, register client sites with URLs, get **automatic uptime checks every 60s** with WebSocket live updates, inline check/restart/logs, optional AI remediation behind the existing approval gate. MCP remains for **investigation** (logs, incidents), not as the main UI.
+
+We kept the agent, executor, and MCP layer; we **cut/hid** portfolio theater from the default experience and invested in onboarding + live fleet visibility.
+
+---
+
+## What you get today (Fleet)
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','lineColor':'#475569'}}}%%
+flowchart TB
+  subgraph Local["Your machine · python server.py :8080"]
+    UI["Fleet dashboard"]
+    Uptime["Uptime checker · 60s"]
+    Poller["SSH poller · 30s"]
+    Agent["AI agent · optional"]
+    MCP["MCP /mcp"]
+    DB[("SQLite")]
+  end
+
+  subgraph VPS["Client VPS hosts"]
+    S1["Site A · Compose"]
+    S2["Site B · Compose"]
+  end
+
+  UI <-->|WebSocket| Uptime
+  Uptime -->|HTTP probe| S1 & S2
+  Poller -->|SSH| S1 & S2
+  Agent --> MCP
+  Uptime & Poller --> DB
+```
+
+| Feature | Status |
+|---------|--------|
+| SSH server onboarding (key path or upload) | ✅ |
+| Add client sites (URL, container, optional compose path) | ✅ |
+| Live uptime (60s) + WebSocket `site_update` | ✅ |
+| Fleet table: status, HTTP, latency, last check | ✅ |
+| Per-site check / check-all / restart / logs | ✅ |
+| Connected servers panel | ✅ |
+| Alerts tab (down sites + pending AI approvals) | ✅ |
+| Incidents history | ✅ |
+| Settings (Slack webhook + email **stored**) | ⚠️ stored only — not sent yet |
+| AI auto-remediation | ⚠️ needs `ANTHROPIC_API_KEY` in `.env` |
+| GitHub deploy correlation | ⚠️ needs `GITHUB_TOKEN` + `repos.yaml` |
+| HTTPS + login for public deploy | ❌ not yet |
+| Slack/email on downtime | ❌ not yet |
+
+---
+
+## How it works
+
+### Fleet loop (primary)
+
+1. **Connect** — Add VPS via SSH (UI wizard or legacy `config/servers.yaml`).
+2. **Register sites** — Client name, URL, server, container name (compose path optional).
+3. **Monitor** — Uptime checker probes URLs every **60s**; dashboard updates live via WebSocket.
+4. **Act** — Restart containers, tail logs, manual re-check from the fleet table.
+5. **Alert** — Down sites surface in the fleet banner and **Alerts** tab; AI approvals appear when the agent proposes fixes.
+
+### Agent loop (optional, unchanged)
+
+1. **Observe** — Poller SSHes each VPS every 30s; metrics and containers → SQLite.
+2. **Detect** — Threshold / baseline anomaly → incident.
+3. **Plan** — Claude one-shot JSON `ProposedAction` (Python pre-gathers context).
+4. **Gate** — Dashboard approval; LOW may auto-execute; HIGH requires typed `CONFIRM`.
+5. **Execute & verify** — Risk-gated SSH, live logs, post-action health check.
 
 ---
 
@@ -35,6 +99,7 @@ Single process on **`127.0.0.1:8080`** — `python server.py` runs FastAPI, WebS
 ### Deployment topology
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
 flowchart TB
   subgraph Clients["Operator channels"]
     Browser["React dashboard<br/>HTTP + WebSocket /ws"]
@@ -77,11 +142,21 @@ flowchart TB
   Executor -->|"SSH write"| VPS
   Agent -->|"correlate CI/CD"| GitHub
   Agent -->|"plan JSON"| Anthropic
+
+  classDef client fill:#ede9fe,stroke:#6d28d9,color:#0f172a
+  classDef core fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  classDef data fill:#e2e8f0,stroke:#475569,color:#0f172a
+  classDef remote fill:#dcfce7,stroke:#15803d,color:#0f172a
+  class Browser,ClaudeDesktop client
+  class Entry,Hub,Poller,Agent,Executor core
+  class Store data
+  class VPS,GitHub,Anthropic remote
 ```
 
 ### System context
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
 flowchart LR
   subgraph Operator
     UI["Browser :8080"]
@@ -121,6 +196,18 @@ flowchart LR
   Infra & ExT -->|paramiko| VPS
   CI --> GHA
   A --> LLM
+
+  classDef operator fill:#ede9fe,stroke:#6d28d9,color:#0f172a
+  classDef runtime fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  classDef tools fill:#fef3c7,stroke:#b45309,color:#0f172a
+  classDef managed fill:#dcfce7,stroke:#15803d,color:#0f172a
+  classDef external fill:#e2e8f0,stroke:#475569,color:#0f172a
+  class UI,CD operator
+  class S,P,A,E runtime
+  class DB external
+  class Infra,Inc,CI,ExT tools
+  class VPS,GHA managed
+  class LLM external
 ```
 
 ---
@@ -130,6 +217,7 @@ flowchart LR
 ### Layered architecture
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
 flowchart TB
   subgraph Presentation["Presentation"]
     Dash["dashboard/<br/>React · Vite · Tailwind"]
@@ -178,42 +266,102 @@ flowchart TB
   Exec --> T4 --> SSH
   Domain --> SQL
   ToolsLayer --> SQL
+
+  style Presentation fill:#ede9fe,stroke:#6d28d9,color:#0f172a
+  style Application fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  style Domain fill:#dcfce7,stroke:#15803d,color:#0f172a
+  style ToolsLayer fill:#fef3c7,stroke:#b45309,color:#0f172a
+  style Persistence fill:#fce7f3,stroke:#be185d,color:#0f172a
+  style External fill:#e2e8f0,stroke:#475569,color:#0f172a
+  classDef node fill:#ffffff,stroke:#64748b,color:#0f172a
+  class Dash,WSClient,API,WS,MCP,Static,Poll,Agt,Exec,T1,T2,T3,T4,SSH,GH,AI node
+  class SQL node
 ```
 
 ### Design constraints
 
 ```mermaid
-mindmap
-  root((Design))
-    Runtime
-      Single process
-      python server.py
-      Bind 127.0.0.1:8080
-    Safety
-      Human-in-the-loop
-      Risk enforced in executor
-      Max 1 pending action per server
-      protected_services block writes
-    Remote ops
-      SSH only paramiko
-      No daemon on VPS
-      10s timeout pooled connections
-    Data
-      SQLite via store.py only
-      UTC in DB local in UI
-      Snapshots pruned after 7d
-    MCP contract
-      Return success and error
-      Never raise to caller
-      Claude Desktop via SSE
-    Learning
-      Rejections to feedback_rules
-      Claude respects on replan
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
+flowchart TB
+  ROOT(["⚙️ Design constraints"])
+
+  subgraph RUN["🚀 Runtime"]
+    direction TB
+    R1["Single process · python server.py"]
+    R2["Bind 127.0.0.1:8080"]
+    R3["No message broker"]
+  end
+
+  subgraph SAF["🛡️ Safety"]
+    direction TB
+    S1["Human-in-the-loop approval gate"]
+    S2["Risk enforced in executor.py"]
+    S3["Max 1 pending action / server"]
+    S4["protected_services block writes"]
+  end
+
+  subgraph OPS["🌐 Remote ops"]
+    direction TB
+    O1["SSH only · paramiko"]
+    O2["No daemon on VPS"]
+    O3["10s timeout · pooled connections"]
+  end
+
+  subgraph DAT["💾 Data"]
+    direction TB
+    D1["SQLite via store.py only"]
+    D2["UTC in DB · local in UI"]
+    D3["Snapshots pruned after 7d"]
+  end
+
+  subgraph MCP["🔌 MCP contract"]
+    direction TB
+    M1["Return success + error"]
+    M2["Never raise to caller"]
+    M3["Claude Desktop via SSE"]
+    M4["MCP rejects HIGH risk approvals"]
+  end
+
+  subgraph LRN["🧠 Learning"]
+    direction TB
+    L1["Rejections → feedback_rules"]
+    L2["Claude respects on replan"]
+  end
+
+  ROOT --> RUN & SAF & OPS & DAT & MCP & LRN
+
+  style ROOT fill:#4338ca,stroke:#312e81,color:#ffffff,stroke-width:2px
+  style RUN fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  style SAF fill:#fee2e2,stroke:#b91c1c,color:#0f172a
+  style OPS fill:#dcfce7,stroke:#15803d,color:#0f172a
+  style DAT fill:#fef3c7,stroke:#b45309,color:#0f172a
+  style MCP fill:#ede9fe,stroke:#6d28d9,color:#0f172a
+  style LRN fill:#fce7f3,stroke:#be185d,color:#0f172a
+  style R1 fill:#bfdbfe,stroke:#1d4ed8,color:#0f172a
+  style R2 fill:#bfdbfe,stroke:#1d4ed8,color:#0f172a
+  style R3 fill:#bfdbfe,stroke:#1d4ed8,color:#0f172a
+  style S1 fill:#fecaca,stroke:#b91c1c,color:#0f172a
+  style S2 fill:#fecaca,stroke:#b91c1c,color:#0f172a
+  style S3 fill:#fecaca,stroke:#b91c1c,color:#0f172a
+  style S4 fill:#fecaca,stroke:#b91c1c,color:#0f172a
+  style O1 fill:#bbf7d0,stroke:#15803d,color:#0f172a
+  style O2 fill:#bbf7d0,stroke:#15803d,color:#0f172a
+  style O3 fill:#bbf7d0,stroke:#15803d,color:#0f172a
+  style D1 fill:#fde68a,stroke:#b45309,color:#0f172a
+  style D2 fill:#fde68a,stroke:#b45309,color:#0f172a
+  style D3 fill:#fde68a,stroke:#b45309,color:#0f172a
+  style M1 fill:#ddd6fe,stroke:#6d28d9,color:#0f172a
+  style M2 fill:#ddd6fe,stroke:#6d28d9,color:#0f172a
+  style M3 fill:#ddd6fe,stroke:#6d28d9,color:#0f172a
+  style M4 fill:#ddd6fe,stroke:#6d28d9,color:#0f172a
+  style L1 fill:#fbcfe8,stroke:#be185d,color:#0f172a
+  style L2 fill:#fbcfe8,stroke:#be185d,color:#0f172a
 ```
 
 ### Component map
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
 flowchart LR
   subgraph Entry
     server["server.py<br/>lifespan · routes · mount static"]
@@ -251,11 +399,27 @@ flowchart LR
   server --> poller & agent & executor & hub
   hub <--> react
   poller & agent & executor --> store
+
+  classDef entry fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  classDef observe fill:#dcfce7,stroke:#15803d,color:#0f172a
+  classDef reason fill:#ede9fe,stroke:#6d28d9,color:#0f172a
+  classDef act fill:#fee2e2,stroke:#b91c1c,color:#0f172a
+  classDef realtime fill:#fef3c7,stroke:#b45309,color:#0f172a
+  classDef ui fill:#fce7f3,stroke:#be185d,color:#0f172a
+  classDef data fill:#e2e8f0,stroke:#475569,color:#0f172a
+  class server entry
+  class poller,metrics,ssh observe
+  class agent reason
+  class executor act
+  class hub realtime
+  class react ui
+  class store,schema data
 ```
 
 ### Data model
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a'}}}%%
 erDiagram
   servers ||--o{ snapshots : captures
   servers ||--o| baselines : tracks
@@ -322,6 +486,7 @@ Full schema: [`db/schema.sql`](db/schema.sql).
 ### End-to-end data flow
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
 flowchart LR
   subgraph Ingest
     VPS["VPS SSH"]
@@ -349,7 +514,8 @@ flowchart LR
     MCP["Claude Desktop"]
     Act --> WS --> UI
     Act --> MCP
-    UI & MCP -->|"approve / reject"| Agent
+    UI -->|"approve · reject · CONFIRM"| Agent
+    MCP -->|"approve LOW/MEDIUM only"| Agent
   end
 
   subgraph Execute
@@ -361,17 +527,29 @@ flowchart LR
     Exec --> VPS2
     Exec -->|"health OK"| Inc
   end
+
+  style Ingest fill:#dcfce7,stroke:#15803d,color:#0f172a
+  style DetectPlan fill:#ede9fe,stroke:#6d28d9,color:#0f172a
+  style Gate fill:#fef3c7,stroke:#b45309,color:#0f172a
+  style Execute fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  classDef node fill:#ffffff,stroke:#64748b,color:#0f172a
+  classDef store fill:#e2e8f0,stroke:#475569,color:#0f172a
+  class VPS,Poller,Anomaly,Agent,Claude,WS,UI,MCP,Exec,VPS2 node
+  class Snap,Base,Inc,Act,Logs store
 ```
 
 ### Approval & risk flow
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','actorTextColor':'#0f172a','signalTextColor':'#0f172a','labelTextColor':'#0f172a','loopTextColor':'#0f172a','noteTextColor':'#0f172a','noteBkgColor':'#fef9c3','noteBorderColor':'#ca8a04','activationBorderColor':'#475569','activationBkgColor':'#e2e8f0','sequenceNumberColor':'#0f172a'}}}%%
 sequenceDiagram
+  autonumber
   participant P as poller.py
   participant A as agent.py
   participant DB as SQLite
   participant WS as WebSocket
-  participant Op as Operator
+  participant UI as Dashboard
+  participant MCP as Claude Desktop
   participant E as executor.py
   participant VPS as VPS
 
@@ -380,19 +558,44 @@ sequenceDiagram
   A->>A: correlate_incident + Claude plan
   A->>DB: proposed_actions (pending)
   A->>WS: action_pending
-  Op->>WS: approve_action (or MCP approve_action)
-  alt risk = low AND auto_execute enabled
-    A->>E: execute (no wait)
-  else
-    Op->>WS: approve after review
+
+  alt risk = LOW AND auto_execute enabled AND not protected/sensitive
+    A->>E: execute immediately (no approval wait)
+  else LOW / MEDIUM / HIGH — human gate required
+    A->>A: schedule 60s timer (approval_timeout_seconds)
+
+    opt still pending after 60s
+      A->>WS: action_pending_reminder
+      Note over WS,MCP: Passive MCP nudge — approve via dashboard<br/>or MCP for LOW/MEDIUM only
+    end
+
+    alt risk = LOW or MEDIUM
+      par Dashboard path
+        UI->>WS: approve_action
+        WS->>A: approve (source=dashboard)
+      and MCP fallback path
+        MCP->>A: approve_action (source=mcp)
+        Note over MCP: Allowed for LOW and MEDIUM
+      end
+    else risk = HIGH — dashboard only
+      MCP->>A: approve_action (source=mcp)
+      A-->>MCP: reject — HIGH requires dashboard CONFIRM
+      UI->>WS: approve_action + confirm_text=CONFIRM
+      Note over UI: Sensitive HIGH also requires COMPLIANCE ack
+      WS->>A: approve (source=dashboard)
+    end
+
+    A->>DB: status = approved
+    A->>E: execute_and_finalize
   end
+
   E->>VPS: SSH / docker (snapshot first)
   E->>WS: action_log_line (stream)
   E->>VPS: health check
   alt health fail
     E->>VPS: rollback
     E->>WS: action_rolled_back
-  else
+  else health OK
     E->>DB: incident resolved
     E->>WS: incident_resolved
   end
@@ -401,6 +604,7 @@ sequenceDiagram
 ### Risk tiers
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
 flowchart TD
   Action["ProposedAction"] --> Check{"risk_tier?"}
 
@@ -408,25 +612,48 @@ flowchart TD
   Check -->|MEDIUM| Med["Compose change · rollback · scale"]
   Check -->|HIGH| High["Arbitrary SSH command"]
 
-  Low --> Auto{"auto_execute_risk_tier: low?"}
+  Low --> Auto{"auto_execute_risk_tier: low?<br/>and not protected/sensitive?"}
   Auto -->|yes| Run["executor.py runs"]
-  Auto -->|no| Wait["Dashboard approval"]
+  Auto -->|no| LowWait["Dashboard or MCP approval"]
 
-  Med --> Approve["Always requires approval"]
-  High --> Confirm["Approval + type CONFIRM"]
+  Med --> MedWait["Dashboard or MCP approval<br/>no CONFIRM required"]
 
-  Approve --> Run
-  Confirm --> Run
-  Wait --> Run
+  High --> DashOnly["Dashboard only — MCP rejects"]
+  DashOnly --> Confirm["Type CONFIRM to approve"]
+  Confirm --> Sensitive{"sensitive service?"}
+  Sensitive -->|yes| Compliance["Also type COMPLIANCE"]
+  Sensitive -->|no| Run
+
+  LowWait --> Run
+  MedWait --> Run
+  Compliance --> Run
 
   Run --> Protected{"service in protected_services?"}
   Protected -->|yes| Block["Blocked even if LOW"]
   Protected -->|no| SSH["SSH execute + health check"]
+
+  style Action fill:#4338ca,stroke:#312e81,color:#ffffff
+  style Check fill:#fef3c7,stroke:#b45309,color:#0f172a
+  style Low fill:#dcfce7,stroke:#15803d,color:#0f172a
+  style Med fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  style High fill:#fee2e2,stroke:#b91c1c,color:#0f172a
+  style DashOnly fill:#fecaca,stroke:#b91c1c,color:#0f172a
+  style Confirm fill:#991b1b,stroke:#7f1d1d,color:#ffffff
+  style Compliance fill:#9a3412,stroke:#7c2d0d,color:#ffffff
+  style Run fill:#bbf7d0,stroke:#15803d,color:#0f172a
+  style LowWait fill:#dcfce7,stroke:#15803d,color:#0f172a
+  style MedWait fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  style Sensitive fill:#fef3c7,stroke:#b45309,color:#0f172a
+  style Protected fill:#fef3c7,stroke:#b45309,color:#0f172a
+  style Auto fill:#fef3c7,stroke:#b45309,color:#0f172a
+  style Block fill:#334155,stroke:#0f172a,color:#ffffff
+  style SSH fill:#bbf7d0,stroke:#15803d,color:#0f172a
 ```
 
 ### WebSocket protocol
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
 flowchart LR
   subgraph ServerToClient["Server → client"]
     S1["snapshot_update<br/>live metrics"]
@@ -447,11 +674,18 @@ flowchart LR
 
   Hub["ws_hub.py"] --> ServerToClient
   ClientToServer --> Hub
+
+  style ServerToClient fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  style ClientToServer fill:#dcfce7,stroke:#15803d,color:#0f172a
+  style Hub fill:#4338ca,stroke:#312e81,color:#ffffff
+  classDef evt fill:#ffffff,stroke:#64748b,color:#0f172a
+  class S1,S2,S3,S4,S5,S6,S7,S8,C1,C2,C3 evt
 ```
 
 ### External integrations
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryTextColor':'#0f172a','secondaryTextColor':'#0f172a','tertiaryTextColor':'#0f172a','lineColor':'#475569','textColor':'#0f172a','clusterBkg':'#f8fafc','clusterBorder':'#64748b','titleColor':'#0f172a'}}}%%
 flowchart TB
   subgraph DevOpsAgent["devops-agent"]
     Poll["poller.py"]
@@ -474,6 +708,13 @@ flowchart TB
   Agt --> CICD
   CD <-->|approve · reject · reminder| DevOpsAgent
   BR <-->|live UI| DevOpsAgent
+
+  classDef agent fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  classDef external fill:#dcfce7,stroke:#15803d,color:#0f172a
+  classDef channel fill:#ede9fe,stroke:#6d28d9,color:#0f172a
+  class Poll,Agt,Exe,CICD,Infra agent
+  class VPS,GH,AI external
+  class CD,BR channel
 ```
 
 ---
@@ -482,9 +723,9 @@ flowchart TB
 
 | Tier | Examples | Default behavior |
 |------|----------|------------------|
-| **Low** | Restart one container, read-only diagnostics | May auto-execute if `auto_execute_risk_tier: low` in `config/rules.yaml` |
-| **Medium** | Compose changes, rollback deploy, scale, trigger workflow | Always requires approval |
-| **High** | Arbitrary SSH | Approval + type **CONFIRM** in dashboard |
+| **Low** | Restart one container, read-only diagnostics | May auto-execute if `auto_execute_risk_tier: low` in `config/rules.yaml` (not on protected/sensitive services) |
+| **Medium** | Compose changes, rollback deploy, scale, trigger workflow | Always requires approval — dashboard **or** MCP |
+| **High** | Arbitrary SSH | **Dashboard only** — type **CONFIRM**; MCP `approve_action` is rejected |
 
 Executor enforces tiers even if the model mis-labels risk. Rejections become natural-language **feedback rules** Claude must respect on future plans.
 
@@ -511,50 +752,83 @@ Executor enforces tiers even if the model mis-labels risk. Rejections become nat
 ```
 devops-mcp/
 ├── server.py              # Entry: FastAPI + MCP + WebSocket + static
-├── poller.py              # 30s health loop
+├── fleet_routes.py        # Fleet API: servers, sites, settings
+├── fleet_sync.py          # DB ↔ servers.yaml sync
+├── onboarding.py          # SSH test, compose discovery, containers
+├── uptime_checker.py      # HTTP uptime every 60s
+├── poller.py              # 30s SSH health loop
 ├── agent.py               # Claude observe→plan→gate loop
 ├── executor.py            # Risk-gated execution orchestration
 ├── tools/                 # MCP tool implementations
 ├── db/                    # schema.sql + store.py (only DB access)
-├── models/                # Dataclasses / config models
-├── dashboard/             # React SPA → dist/
-├── config/
-│   ├── servers.yaml
-│   ├── rules.yaml
-│   └── repos.yaml         # Multi-repo CI/CD (your config)
-└── tests/
+├── dashboard/             # React SPA → dist/ (Fleet UI)
+├── config/                # servers.yaml, rules.yaml, repos.yaml (gitignored)
+└── tests/                 # 60 tests, mocked SSH/GitHub
 ```
 
-Full layout: [Project.md](Project.md#4-complete-file-structure).
+Full original layout: [Project.md](Project.md#4-complete-file-structure).
+
+---
+
+## Product status
+
+Verified locally (2026-06-29):
+
+| Check | Result |
+|-------|--------|
+| `pytest tests/` | **60 passed** |
+| `npm run build` (dashboard) | ✅ |
+| `GET /api/fleet/overview` | ✅ sites/servers stats |
+| `GET /api/setup/status` | ✅ `product: fleet` |
+| Uptime checker + WS `site_update` | ✅ |
+| Fleet UI (table, check all, logs) | ✅ |
+
+**Known gaps (planned, not blockers for local use):**
+
+- **Slack/email alerts** — webhook saved in Settings; sender not wired to uptime transitions.
+- **Public deploy** — no reverse proxy, TLS, or login yet (`devopsmcp.nevil.ca`).
+- **AI features** — optional; require real Anthropic + GitHub tokens in `.env`.
+- **Legacy UI pages** — Terraform, Runbooks, old Dashboard still in repo; hidden from main nav.
+- **Servers without Docker** — poller errors (e.g. `docker: command not found`); uptime still works if URL is set.
 
 ---
 
 ## Setup
 
-**Prerequisites:** Python 3.11+, Node 18+, SSH key access to VPS, Anthropic + GitHub tokens.
+**Prerequisites:** Python 3.11+, Node 18+, SSH key access to at least one VPS.
 
 ```bash
-git clone https://github.com/NevilPatel01/devops-mcp
-cd devops-mcp
+git clone https://github.com/NevilPatel01/DevOpsAI
+cd DevOpsAI
 
-# Python 3.11+ (use 3.11 venv — 3.14 lacks pydantic-core wheels)
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Dashboard
 cd dashboard && npm install && npm run build && cd ..
 
-# Config (servers.yaml and repos.yaml are gitignored)
 cp .env.example .env
-cp config/servers.yaml.example config/servers.yaml
-cp config/repos.yaml.example config/repos.yaml
-# Edit servers.yaml (SSH hosts) and repos.yaml (GitHub owner/name + linked_servers)
+cp config/repos.yaml.example config/repos.yaml   # optional — for GitHub correlation
 
-# Run
 python server.py
 # → http://127.0.0.1:8080
 ```
+
+### First run (UI — recommended)
+
+1. Open **http://127.0.0.1:8080** → **Fleet** tab.
+2. **Add server** — host, SSH user, key path or upload private key; test connection.
+3. **Add site** — client name, URL, pick server, container name (compose path optional).
+4. Watch the fleet table — status, HTTP code, latency, and last check update every **60s** (live via WebSocket).
+
+### Legacy YAML path (optional)
+
+```bash
+cp config/servers.yaml.example config/servers.yaml
+# Edit hosts — imported into DB on first start if DB is empty
+```
+
+Set `ANTHROPIC_API_KEY` and `GITHUB_TOKEN` in `.env` when you want AI remediation and deploy correlation.
 
 ### Setup checklist
 
@@ -562,19 +836,16 @@ Before relying on the agent, confirm each item:
 
 | Step | Command / action |
 |------|------------------|
-| Repos | `cp config/repos.yaml.example config/repos.yaml` — edit owner/name and `linked_servers` |
-| Env | `cp .env.example .env` — set `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, optional `DATABASE_PATH` |
-| Servers | `cp config/servers.yaml.example config/servers.yaml` — SSH hosts and services |
+| Env | `cp .env.example .env` — optional keys for AI/GitHub |
 | Dashboard | `cd dashboard && npm install && npm run build` |
-| Server | `python server.py` (from repo root with venv active) |
-| Health | `curl -s http://127.0.0.1:8080/api/health` → `{"status":"ok",...}` |
-| Setup | `curl -s http://127.0.0.1:8080/api/setup/status` — all flags should be true when ready |
+| Server | `python server.py` (venv active) |
+| Health | `curl -s http://127.0.0.1:8080/api/health` |
+| Fleet | `curl -s http://127.0.0.1:8080/api/fleet/overview` |
+| Setup | `curl -s http://127.0.0.1:8080/api/setup/status` — `servers_in_db`, `sites_count`, `product: fleet` |
 
-The Overview page shows a **Setup checklist** banner when anything is missing (dismissible while incomplete).
+The Fleet page shows a **setup banner** when servers or sites are missing.
 
-**Handoff shortcut:** on the dashboard, press **H** to open the oncall handoff drawer (or use **Generate handoff** in the header).
-
-**Claude Desktop (approval fallback):** copy `claude_desktop_config.json` to your Claude Desktop config and set the absolute path to `server.py`.
+**Claude Desktop / Cursor MCP:** connect to `http://127.0.0.1:8080/mcp` (SSE) while `python server.py` is running — see `claude_desktop_config.json`.
 
 ---
 
@@ -599,11 +870,12 @@ Cursor workflow: `.cursor/rules/` and `.cursor/commands/`.
 
 ## What I built & learned
 
-- **MCP tool design:** Consistent `{success, error}` contracts and shared approval handlers for dashboard + Claude Desktop.
-- **Async Python:** Poller, agent, and WebSocket in one process without blocking SSH.
-- **Human-in-the-loop AI:** Risk tiers enforced at execution time, not only in prompts; rejections become durable natural-language rules.
-- **Ops realism:** SSH-only monitoring—no daemon on managed servers—mirrors how small teams run VPS today.
-- **Phase 6 compliance:** Sensitive-service tiers, audit log, dashboard `COMPLIANCE` ack for HIGH—documented in [docs/DECISIONS.md](docs/DECISIONS.md); not a certification claim.
+- **Product pivot:** Optimizing for **daily fleet ops** (uptime, logs, restart) beat showcasing every agent feature in the main nav.
+- **Site-first data model:** `sites` + `managed_servers` in SQLite with YAML sync for the legacy poller.
+- **Live UX:** WebSocket `site_update` beats polling; fleet table shows everything without drilling into drawers.
+- **MCP tool design:** Consistent `{success, error}` contracts; MCP for investigation, dashboard for actions.
+- **Human-in-the-loop AI:** Risk tiers enforced in `executor.py`, not only in prompts.
+- **Ops realism:** SSH-only on VPS — no daemon on client servers.
 
 ### Works offline vs needs your VPS
 

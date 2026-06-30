@@ -50,7 +50,7 @@ export default function ApprovalCard({ action, onClear }) {
 
   return (
     <section
-      className={`rounded-xl border p-5 shadow-lg ${riskStyles[risk] || riskStyles.medium}`}
+      className={`rounded-xl border p-4 ${riskStyles[risk] || riskStyles.medium}`}
       role="alert"
     >
       <motionHeader risk={risk} />

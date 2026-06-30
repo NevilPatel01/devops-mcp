@@ -6,32 +6,25 @@ const DISMISS_KEY = "devops-setup-banner-dismissed";
 function missingItems(status) {
   if (!status) return [];
   const items = [];
-  if (!status.servers_configured) {
+  if ((status.servers_in_db ?? 0) === 0 && !status.servers_configured) {
     items.push({
       id: "servers",
-      label: "Server config",
-      hint: "cp config/servers.yaml.example → config/servers.yaml and add your VPS hosts",
+      label: "Connect a VPS",
+      hint: "Fleet → Add server (SSH key or upload)",
     });
   }
-  if (!status.repos_configured || status.repos_count === 0) {
+  if ((status.sites_count ?? 0) === 0) {
     items.push({
-      id: "repos",
-      label: "Repos config",
-      hint: "cp config/repos.yaml.example → config/repos.yaml and link repos to servers",
+      id: "sites",
+      label: "Add a client site",
+      hint: "Fleet → Add site with URL for live uptime monitoring",
     });
   }
   if (!status.anthropic_configured) {
     items.push({
       id: "anthropic",
-      label: "Anthropic API key",
-      hint: "Set ANTHROPIC_API_KEY in .env (copy from .env.example)",
-    });
-  }
-  if (!status.github_configured) {
-    items.push({
-      id: "github",
-      label: "GitHub token",
-      hint: "Set GITHUB_TOKEN in .env for CI/CD correlation and rollback",
+      label: "AI optional",
+      hint: "Settings → Anthropic key for auto-remediation (monitoring works without it)",
     });
   }
   if (!status.dashboard_built) {
@@ -73,7 +66,7 @@ export default function SetupBanner() {
       <button
         type="button"
         onClick={() => setCollapsed(false)}
-        className="mb-4 w-full rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-3 py-2 text-left text-xs text-slate-500 hover:border-slate-600 hover:text-slate-400"
+        className="w-full rounded-xl border border-dashed border-surface-border bg-surface-overlay/40 px-4 py-2.5 text-left text-xs text-slate-500 transition hover:border-accent/30 hover:text-slate-300"
       >
         Setup incomplete — show checklist ({gaps.length} item{gaps.length === 1 ? "" : "s"})
       </button>
@@ -86,42 +79,27 @@ export default function SetupBanner() {
   };
 
   return (
-    <section
-      className="mb-6 rounded-xl border border-amber-800/60 bg-gradient-to-br from-amber-950/40 to-slate-900/80 p-4 shadow-lg"
-      role="status"
-    >
+    <section className="glass-panel border-amber-500/20 p-5" role="status">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-amber-100">Setup checklist</h2>
-          <p className="text-xs text-slate-400">
-            Phase {status.phase} — finish these before full agent features work
-          </p>
+          <h2 className="text-sm font-semibold text-amber-200">Getting started</h2>
+          <p className="text-xs text-slate-500">Complete these steps to monitor your fleet</p>
         </div>
-        <button
-          type="button"
-          onClick={dismiss}
-          className="shrink-0 text-xs text-slate-500 hover:text-slate-300"
-        >
+        <button type="button" onClick={dismiss} className="text-xs text-slate-500 hover:text-slate-300">
           Dismiss
         </button>
       </div>
-      <ul className="mt-3 space-y-2">
+      <ul className="mt-4 space-y-2">
         {gaps.map((item) => (
           <li
             key={item.id}
-            className="rounded-lg border border-slate-800/80 bg-slate-950/50 px-3 py-2"
+            className="rounded-xl border border-surface-border/80 bg-surface/60 px-4 py-3"
           >
-            <p className="text-sm font-medium text-amber-100">{item.label}</p>
-            <p className="mt-0.5 font-mono text-xs text-slate-400">{item.hint}</p>
+            <p className="text-sm font-medium text-slate-200">{item.label}</p>
+            <p className="mt-0.5 text-xs text-slate-500">{item.hint}</p>
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-xs text-slate-500">
-        Verify with{" "}
-        <code className="rounded bg-slate-800 px-1 text-slate-300">
-          curl localhost:8080/api/setup/status
-        </code>
-      </p>
     </section>
   );
 }

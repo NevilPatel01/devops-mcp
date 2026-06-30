@@ -3,6 +3,9 @@
 config/servers.yaml
 config/repos.yaml
 
+# Uploaded SSH keys (onboarding)
+data/keys/
+
 # SQLite
 *.db
 devops_agent.db

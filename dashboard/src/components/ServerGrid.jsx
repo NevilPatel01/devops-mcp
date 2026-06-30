@@ -65,10 +65,13 @@ export default function ServerGrid({ servers = [] }) {
 
   if (servers.length === 0) {
     return (
-      <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-6">
-        <h2 className="text-lg font-semibold text-slate-200">Servers</h2>
+      <section className="glass-panel p-6">
+        <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-slate-500">
+          Infrastructure
+        </h2>
         <p className="mt-2 text-sm text-slate-400">
-          Connecting to poller… Live metrics appear within ~30s for configured hosts.
+          No live metrics yet. Add a server under <strong className="text-slate-300">Sites</strong> — SSH
+          poller updates every ~30s.
         </p>
       </section>
     );
@@ -76,7 +79,9 @@ export default function ServerGrid({ servers = [] }) {
 
   return (
     <section className="space-y-4">
-      <h2 className="text-lg font-semibold text-slate-200">Servers</h2>
+      <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-slate-500">
+        Infrastructure
+      </h2>
       <div className="grid gap-4 sm:grid-cols-2">
         {servers.map((s) => {
           const id = s.server_id;
@@ -94,10 +99,8 @@ export default function ServerGrid({ servers = [] }) {
                   setSelectedId(isSelected ? null : id);
                 }
               }}
-              className={`cursor-pointer rounded-xl border p-4 transition-colors ${
-                isSelected
-                  ? "border-sky-500 bg-slate-900/80 ring-1 ring-sky-500/40"
-                  : "border-slate-800 bg-slate-900/50 hover:border-slate-600"
+              className={`glass-panel-hover cursor-pointer p-4 ring-1 ${
+                isSelected ? "ring-accent/50" : "ring-transparent"
               }`}
             >
               <div className="flex items-center justify-between gap-2">

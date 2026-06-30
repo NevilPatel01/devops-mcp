@@ -162,3 +162,48 @@ CREATE TABLE IF NOT EXISTS service_baselines (
 
 CREATE INDEX IF NOT EXISTS idx_suppression_server_expires
     ON suppression_patterns (server_id, expires_at);
+
+-- Product v2: fleet onboarding (sites-first)
+
+CREATE TABLE IF NOT EXISTS managed_servers (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    host TEXT NOT NULL,
+    port INTEGER DEFAULT 22,
+    ssh_user TEXT DEFAULT 'root',
+    ssh_key_path TEXT DEFAULT '~/.ssh/id_ed25519',
+    services_json TEXT DEFAULT '[]',
+    thresholds_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sites (
+    id TEXT PRIMARY KEY,
+    client_name TEXT,
+    name TEXT NOT NULL,
+    url TEXT,
+    server_id TEXT NOT NULL,
+    compose_file TEXT,
+    service_name TEXT,
+    environment TEXT DEFAULT 'production',
+    repo_id TEXT,
+    sensitive INTEGER DEFAULT 0,
+    uptime_status TEXT DEFAULT 'unknown',
+    uptime_status_code INTEGER,
+    uptime_latency_ms REAL,
+    uptime_checked_at TIMESTAMP,
+    ssl_expires_at TIMESTAMP,
+    status TEXT DEFAULT 'unknown',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sites_server ON sites (server_id);
+CREATE INDEX IF NOT EXISTS idx_sites_status ON sites (status);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

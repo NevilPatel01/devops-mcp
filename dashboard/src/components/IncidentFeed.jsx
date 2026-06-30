@@ -55,29 +55,21 @@ export default function IncidentFeed({ onSelect, showFilters = false }) {
       : incidents.filter((i) => i.status === statusFilter);
 
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-6">
+    <section className="panel p-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-200">Incidents</h2>
-        <button
-          type="button"
-          onClick={load}
-          className="text-xs text-sky-400 hover:text-sky-300"
-        >
+        <h2 className="text-sm font-medium text-zinc-200">Timeline</h2>
+        <button type="button" onClick={load} className="btn-ghost px-2 py-1 text-xs">
           Refresh
         </button>
       </div>
       {showFilters && (
-        <div className="mt-3 flex flex-wrap gap-1">
+        <div className="segment mt-3">
           {statusFilters.map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setStatusFilter(s)}
-              className={`rounded-full px-2.5 py-0.5 text-xs capitalize ${
-                statusFilter === s
-                  ? "bg-sky-800 text-sky-100"
-                  : "bg-slate-800 text-slate-500 hover:text-slate-300"
-              }`}
+              className={`capitalize ${statusFilter === s ? "segment-btn-active" : "segment-btn"}`}
             >
               {s.replace("_", " ")}
             </button>
@@ -89,13 +81,13 @@ export default function IncidentFeed({ onSelect, showFilters = false }) {
       {!loading && filtered.length === 0 && (
         <p className="mt-2 text-sm text-slate-500">No incidents recorded yet.</p>
       )}
-      <ul className="mt-3 divide-y divide-slate-800">
+      <ul className="mt-3 divide-y divide-surface-border">
         {filtered.map((inc) => (
           <li key={inc.id}>
             <button
               type="button"
               onClick={() => onSelect?.(inc)}
-              className="flex w-full flex-wrap items-center gap-2 py-3 text-left hover:bg-slate-800/40"
+              className="flex w-full flex-wrap items-center gap-2 py-3 text-left transition hover:bg-white/[0.03]"
             >
               <span
                 className={`text-xs font-medium uppercase ${

@@ -148,6 +148,54 @@ async def _migrate_schema(conn: aiosqlite.Connection) -> None:
         if not await cursor.fetchone():
             await conn.executescript(table_sql)
 
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='managed_servers'"
+    )
+    if not await cursor.fetchone():
+        await conn.executescript(
+            """
+            CREATE TABLE managed_servers (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER DEFAULT 22,
+                ssh_user TEXT DEFAULT 'root',
+                ssh_key_path TEXT DEFAULT '~/.ssh/id_ed25519',
+                services_json TEXT DEFAULT '[]',
+                thresholds_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE sites (
+                id TEXT PRIMARY KEY,
+                client_name TEXT,
+                name TEXT NOT NULL,
+                url TEXT,
+                server_id TEXT NOT NULL,
+                compose_file TEXT,
+                service_name TEXT,
+                environment TEXT DEFAULT 'production',
+                repo_id TEXT,
+                sensitive INTEGER DEFAULT 0,
+                uptime_status TEXT DEFAULT 'unknown',
+                uptime_status_code INTEGER,
+                uptime_latency_ms REAL,
+                uptime_checked_at TIMESTAMP,
+                ssl_expires_at TIMESTAMP,
+                status TEXT DEFAULT 'unknown',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX idx_sites_server ON sites (server_id);
+            CREATE INDEX idx_sites_status ON sites (status);
+            CREATE TABLE app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
 
 async def init_db(db_path: Path | None = None) -> None:
     """Create database and apply schema."""
@@ -1176,3 +1224,241 @@ async def get_snapshots_for_incident_window(
         (server_id, f"-{minutes} minutes", limit),
     )
     return [_snapshot_row_to_dict(r) for r in await cursor.fetchall()]
+
+
+def _json_loads(raw: str | None, default: Any) -> Any:
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return default
+
+
+# --- Fleet v2: managed servers & sites ---
+
+
+async def list_managed_servers() -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "SELECT * FROM managed_servers ORDER BY label, id"
+    )
+    rows = await cursor.fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["services"] = _json_loads(d.pop("services_json", None), [])
+        d["thresholds"] = _json_loads(d.pop("thresholds_json", None), {})
+        out.append(d)
+    return out
+
+
+async def get_managed_server(server_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "SELECT * FROM managed_servers WHERE id = ?", (server_id,)
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["services"] = _json_loads(d.pop("services_json", None), [])
+    d["thresholds"] = _json_loads(d.pop("thresholds_json", None), {})
+    return d
+
+
+async def upsert_managed_server(
+    server_id: str,
+    *,
+    label: str,
+    host: str,
+    port: int = 22,
+    ssh_user: str = "root",
+    ssh_key_path: str = "~/.ssh/id_ed25519",
+    services: list[dict[str, Any]] | None = None,
+    thresholds: dict[str, Any] | None = None,
+) -> None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        INSERT INTO managed_servers (
+            id, label, host, port, ssh_user, ssh_key_path,
+            services_json, thresholds_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            label = excluded.label,
+            host = excluded.host,
+            port = excluded.port,
+            ssh_user = excluded.ssh_user,
+            ssh_key_path = excluded.ssh_key_path,
+            services_json = excluded.services_json,
+            thresholds_json = excluded.thresholds_json,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            server_id,
+            label,
+            host,
+            port,
+            ssh_user,
+            ssh_key_path,
+            json.dumps(services or []),
+            json.dumps(thresholds) if thresholds else None,
+        ),
+    )
+    await conn.commit()
+
+
+async def delete_managed_server(server_id: str) -> None:
+    conn = await _conn()
+    await conn.execute("DELETE FROM managed_servers WHERE id = ?", (server_id,))
+    await conn.execute("DELETE FROM sites WHERE server_id = ?", (server_id,))
+    await conn.commit()
+
+
+async def count_managed_servers() -> int:
+    conn = await _conn()
+    cursor = await conn.execute("SELECT COUNT(*) FROM managed_servers")
+    row = await cursor.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def list_sites() -> list[dict[str, Any]]:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "SELECT * FROM sites ORDER BY client_name, name"
+    )
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+async def get_site(site_id: str) -> dict[str, Any] | None:
+    conn = await _conn()
+    cursor = await conn.execute("SELECT * FROM sites WHERE id = ?", (site_id,))
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def upsert_site(
+    site_id: str,
+    *,
+    name: str,
+    server_id: str,
+    client_name: str | None = None,
+    url: str | None = None,
+    compose_file: str | None = None,
+    service_name: str | None = None,
+    environment: str = "production",
+    repo_id: str | None = None,
+    sensitive: bool = False,
+) -> None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        INSERT INTO sites (
+            id, client_name, name, url, server_id, compose_file,
+            service_name, environment, repo_id, sensitive, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            client_name = excluded.client_name,
+            name = excluded.name,
+            url = excluded.url,
+            server_id = excluded.server_id,
+            compose_file = excluded.compose_file,
+            service_name = excluded.service_name,
+            environment = excluded.environment,
+            repo_id = excluded.repo_id,
+            sensitive = excluded.sensitive,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            site_id,
+            client_name,
+            name,
+            url,
+            server_id,
+            compose_file,
+            service_name,
+            environment,
+            repo_id,
+            1 if sensitive else 0,
+        ),
+    )
+    await conn.commit()
+
+
+async def delete_site(site_id: str) -> None:
+    conn = await _conn()
+    await conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
+    await conn.commit()
+
+
+async def update_site_uptime(
+    site_id: str,
+    *,
+    uptime_status: str,
+    uptime_status_code: int | None,
+    uptime_latency_ms: float | None,
+    ssl_expires_at: str | None = None,
+) -> None:
+    conn = await _conn()
+    status = uptime_status if uptime_status == "up" else (
+        "down" if uptime_status == "down" else "degraded"
+    )
+    await conn.execute(
+        """
+        UPDATE sites SET
+            uptime_status = ?,
+            uptime_status_code = ?,
+            uptime_latency_ms = ?,
+            uptime_checked_at = CURRENT_TIMESTAMP,
+            ssl_expires_at = COALESCE(?, ssl_expires_at),
+            status = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            uptime_status,
+            uptime_status_code,
+            uptime_latency_ms,
+            ssl_expires_at,
+            status,
+            site_id,
+        ),
+    )
+    await conn.commit()
+
+
+async def get_setting(key: str) -> str | None:
+    conn = await _conn()
+    cursor = await conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?", (key,)
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def set_setting(key: str, value: str) -> None:
+    conn = await _conn()
+    await conn.execute(
+        """
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (key, value),
+    )
+    await conn.commit()
+
+
+async def get_settings(prefix: str | None = None) -> dict[str, str]:
+    conn = await _conn()
+    if prefix:
+        cursor = await conn.execute(
+            "SELECT key, value FROM app_settings WHERE key LIKE ?",
+            (f"{prefix}%",),
+        )
+    else:
+        cursor = await conn.execute("SELECT key, value FROM app_settings")
+    return {row[0]: row[1] for row in await cursor.fetchall()}

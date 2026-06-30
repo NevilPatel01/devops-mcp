@@ -15,7 +15,7 @@ class ComplianceFileConfig(BaseModel):
 
 class ServiceConfig(BaseModel):
     name: str
-    compose_file: str
+    compose_file: str = ""
     sensitive: bool = False
     compliance_profile: str | None = None
     health_check_url: str | None = None

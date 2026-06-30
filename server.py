@@ -27,10 +27,13 @@ from approvals import (
     reject_action_by_id,
 )
 from db import store
+from fleet_routes import router as fleet_router
+from fleet_sync import import_yaml_to_db_if_empty, rebuild_servers_yaml
 from mcp_registry import initialization_options, mcp_server
 from models.config import load_app_config, load_repos_config
 from poller import start_poller, stop_poller
 from ssh_client import check_port_available
+from uptime_checker import start_uptime_checker, stop_uptime_checker
 from ws_hub import register, unregister
 
 load_dotenv()
@@ -49,6 +52,8 @@ async def lifespan(app: FastAPI):
     await store.init_db()
     await store.prune_snapshots_older_than_days(7)
     await store.prune_compliance_audit_older_than_days(90)
+    await import_yaml_to_db_if_empty()
+    await rebuild_servers_yaml()
     try:
         cfg = load_app_config()
         for s in cfg.servers.servers:
@@ -57,13 +62,16 @@ async def lifespan(app: FastAPI):
     except FileNotFoundError as exc:
         logger.warning("%s", exc)
     await start_poller()
+    await start_uptime_checker()
     await broadcast_pending_actions()
     yield
+    await stop_uptime_checker()
     await stop_poller()
     await store.close_db()
 
 
-app = FastAPI(title="DevOps AI Agent", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="DevOps MCP", version="1.0.0", lifespan=lifespan)
+app.include_router(fleet_router)
 
 
 def _anthropic_configured() -> bool:
@@ -76,7 +84,7 @@ def _github_configured() -> bool:
     return bool(token) and not token.startswith("github_pat_...")
 
 
-def build_setup_status() -> dict:
+async def build_setup_status() -> dict:
     """Return setup checklist fields for /api/setup/status and tests."""
     config_dir = ROOT / "config"
     servers_path = Path(
@@ -91,9 +99,14 @@ def build_setup_status() -> dict:
             repos_count = len(load_repos_config(repos_path).repos)
         except Exception:
             repos_count = 0
+    sites = await store.list_sites()
+    sites_count = len(sites)
     return {
         "phase": 8,
+        "product": "fleet",
         "servers_configured": servers_configured,
+        "servers_in_db": await store.count_managed_servers(),
+        "sites_count": sites_count,
         "repos_configured": repos_configured,
         "repos_count": repos_count,
         "anthropic_configured": _anthropic_configured(),
@@ -109,7 +122,7 @@ async def health() -> dict:
 
 @app.get("/api/setup/status")
 async def setup_status() -> dict:
-    return build_setup_status()
+    return await build_setup_status()
 
 
 @app.get("/api/incidents")

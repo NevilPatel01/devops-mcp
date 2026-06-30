@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from db import store
 from server import app, build_setup_status
 
 
@@ -24,13 +25,17 @@ async def test_setup_status_endpoint() -> None:
     assert isinstance(data["dashboard_built"], bool)
 
 
-def test_build_setup_status_env_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_build_setup_status_env_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    await store.init_db(tmp_path / "test_setup.db")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-...")
     monkeypatch.setenv("GITHUB_TOKEN", "github_pat_...")
     monkeypatch.setenv("SERVERS_CONFIG_PATH", str(tmp_path / "missing-servers.yaml"))
     monkeypatch.setenv("REPOS_CONFIG_PATH", str(tmp_path / "missing-repos.yaml"))
 
-    status = build_setup_status()
+    status = await build_setup_status()
     assert status["anthropic_configured"] is False
     assert status["github_configured"] is False
     assert status["servers_configured"] is False
@@ -39,6 +44,6 @@ def test_build_setup_status_env_flags(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real-key-value")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_real_token_value")
-    status = build_setup_status()
+    status = await build_setup_status()
     assert status["anthropic_configured"] is True
     assert status["github_configured"] is True

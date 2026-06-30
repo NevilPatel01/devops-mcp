@@ -2,13 +2,160 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  margin: 0;
-  font-family:
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+@layer base {
+  html {
+    @apply h-full;
+  }
+
+  body {
+    @apply h-full bg-surface text-zinc-100 antialiased;
+    margin: 0;
+    font-family: Inter, system-ui, sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  #root {
+    @apply h-full min-h-screen;
+  }
+
+  ::selection {
+    @apply bg-accent/30 text-white;
+  }
+}
+
+@layer components {
+  .input-field {
+    @apply w-full rounded-lg border border-surface-border bg-surface-raised px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 transition focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/20;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg bg-white px-3.5 py-2 text-sm font-medium text-zinc-950 transition hover:bg-zinc-200 disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-surface-border bg-surface-overlay px-3.5 py-2 text-sm font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800/80 disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm text-zinc-400 transition hover:bg-white/5 hover:text-zinc-100 disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .btn-danger-ghost {
+    @apply inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm text-zinc-500 transition hover:bg-red-500/10 hover:text-red-300;
+  }
+
+  .nav-item {
+    @apply relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-500 transition hover:bg-white/[0.04] hover:text-zinc-200;
+  }
+
+  .nav-item-active {
+    @apply nav-item bg-white/[0.06] font-medium text-white;
+  }
+
+  .nav-item-active::before {
+    content: "";
+    @apply absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-white;
+  }
+
+  .segment {
+    @apply inline-flex rounded-lg border border-surface-border bg-surface-raised p-0.5;
+  }
+
+  .segment-btn {
+    @apply rounded-md px-3 py-1.5 text-xs font-medium text-zinc-500 transition hover:text-zinc-300;
+  }
+
+  .segment-btn-active {
+    @apply segment-btn bg-surface-overlay text-white shadow-sm;
+  }
+
+  .panel {
+    @apply rounded-xl border border-surface-border bg-surface-raised shadow-panel;
+  }
+
+  .glass-panel {
+    @apply rounded-xl border border-surface-border bg-surface-raised shadow-modal;
+  }
+
+  .status-dot {
+    @apply h-1.5 w-1.5 shrink-0 rounded-full;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide;
+  }
+
+  .badge-up {
+    @apply badge bg-emerald-500/10 text-emerald-400;
+  }
+
+  .badge-down {
+    @apply badge bg-red-500/10 text-red-400;
+  }
+
+  .badge-unknown {
+    @apply badge bg-zinc-500/10 text-zinc-400;
+  }
+
+  .table-wrap {
+    @apply panel overflow-x-auto;
+  }
+
+  .fleet-table {
+    @apply w-full min-w-[640px] border-collapse text-left text-sm;
+  }
+
+  .fleet-table thead tr {
+    @apply border-b border-surface-border;
+  }
+
+  .fleet-table th {
+    @apply px-3 py-2.5 text-[10px] font-medium uppercase tracking-wider text-zinc-600;
+  }
+
+  .fleet-table td {
+    @apply px-3 py-3 align-middle;
+  }
+
+  .fleet-row {
+    @apply border-b border-surface-border/60 transition hover:bg-white/[0.02];
+  }
+
+  .fleet-row-down {
+    @apply bg-red-500/[0.04];
+  }
+
+  .fleet-row-expanded td {
+    @apply border-b border-surface-border bg-black/30 pb-4 pt-2;
+  }
+
+  .log-panel {
+    @apply max-h-48 overflow-auto rounded-lg border border-surface-border bg-black/50 p-3 font-mono text-[11px] leading-relaxed text-zinc-400;
+  }
+
+  .alert-banner {
+    @apply flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  .alert-banner-down {
+    @apply alert-banner border-red-500/30 bg-red-500/5;
+  }
+
+  @media (max-width: 640px) {
+    .hide-sm {
+      display: none;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .hide-md {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1024px) {
+    .hide-lg {
+      display: none;
+    }
+  }
 }
